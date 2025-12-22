@@ -326,12 +326,12 @@ export default function Home() {
                     if (e.key === 'Enter') saveEdit(task);
                     if (e.key === 'Escape') cancelEdit();
                   }}
-                  className="flex-1 bg-neutral-800 border border-neutral-700 rounded px-3 py-1 text-lg focus:outline-none"
+                  className="flex-1 min-w-0 bg-neutral-800 border border-neutral-700 rounded px-3 py-1 text-lg focus:outline-none"
                 />
               ) : (
                 <span
                   onClick={() => startEditing(task)}
-                  className={`flex-1 text-lg cursor-text whitespace-pre-wrap ${
+                  className={`flex-1 min-w-0 text-lg cursor-text whitespace-pre-wrap break-words ${
                     task.completed ? 'line-through text-neutral-500' : ''
                   }`}
                 >
