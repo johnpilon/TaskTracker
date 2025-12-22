@@ -1,0 +1,254 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Guidelines for developing accessible web applications (WCAG 2.1 AA compliance), including semantic HTML, ARIA attributes (labels, descriptions, roles), keyboard navigation, focus management, visual design considerations (color contrast), and media accessibility."
+glob: ["src/**/*.{ts,tsx,js,jsx}", "app/**/*.{ts,tsx,js,jsx}", "!**/*.test.{ts,tsx,js,jsx}", "!**/*.spec.{ts,tsx,js,jsx}", "!**/__tests__/**", "!**/node_modules/**"]
+---
+
+# Accessibility Best Practices
+
+## Overview
+This document outlines best practices for implementing accessibility features in our Next.js application following WCAG 2.1 guidelines.
+
+## Key Principles
+
+1. Perceivable - Information must be presentable to users in ways they can perceive
+2. Operable - Interface components must be operable
+3. Understandable - Information and operation must be understandable
+4. Robust - Content must be robust enough to be interpreted by a wide variety of user agents
+
+## Implementation Guidelines
+
+### Semantic HTML
+
+```typescript
+// ✅ DO: Use semantic HTML elements
+export function Article() {
+  return (
+    <article>
+      <h1>Main Heading</h1>
+      <nav>
+        <ul>
+          <li><a href="#section1">Section 1</a></li>
+        </ul>
+      </nav>
+      <main>
+        <section aria-labelledby="section1">
+          <h2 id="section1">Section 1</h2>
+          <p>Content here</p>
+        </section>
+      </main>
+    </article>
+  );
+}
+
+// ❌ DON'T: Use non-semantic elements
+export function Article() {
+  return (
+    <div>
+      <div className="heading">Main Heading</div>
+      <div className="nav">
+        <div>Section 1</div>
+      </div>
+    </div>
+  );
+}
+```
+
+### ARIA Labels and Descriptions
+
+```typescript
+// ✅ DO: Use proper ARIA attributes
+<button
+  aria-label="Close dialog"
+  aria-describedby="dialog-description"
+  onClick={closeDialog}
+>
+  <span className="sr-only">Close</span>
+  <XIcon />
+</button>
+
+// ❌ DON'T: Leave interactive elements without labels
+<button onClick={closeDialog}>
+  <XIcon />
+</button>
+```
+
+### Focus Management
+
+```typescript
+// ✅ DO: Manage focus properly
+const DialogComponent = () => {
+  const focusRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    focusRef.current?.focus();
+    
+    return () => {
+      // Return focus to trigger element
+      triggerElement?.focus();
+    };
+  }, []);
+
+  return (
+    <div
+      ref={focusRef}
+      tabIndex={-1}
+      role="dialog"
+      aria-modal="true"
+    >
+      {/* Dialog content */}
+    </div>
+  );
+};
+
+// ❌ DON'T: Ignore focus management
+const DialogComponent = () => {
+  return (
+    <div role="dialog">
+      {/* Dialog content */}
+    </div>
+  );
+};
+```
+
+## Best Practices
+
+1. **Semantic HTML**
+   - Use appropriate HTML elements
+   - Maintain proper heading hierarchy
+   - Use landmarks appropriately
+   - Implement proper list structures
+
+2. **ARIA Implementation**
+   - Use ARIA labels when needed
+   - Implement proper ARIA roles
+   - Manage aria-expanded states
+   - Use live regions appropriately
+
+3. **Keyboard Navigation**
+   - Ensure all interactive elements are focusable
+   - Implement logical tab order
+   - Provide keyboard shortcuts where appropriate
+   - Manage focus trapping in modals
+
+4. **Visual Design**
+   - Maintain sufficient color contrast
+   - Don't rely solely on color for information
+   - Ensure text is resizable
+   - Support high contrast modes
+
+5. **Media Accessibility**
+   - Provide alt text for images
+   - Include captions for videos
+   - Offer transcripts for audio
+   - Support reduced motion
+
+## Example Implementation
+
+```typescript
+// Accessible Form Component
+'use client';
+
+import { useId } from 'react';
+
+interface FormFieldProps {
+  label: string;
+  error?: string;
+  required?: boolean;
+  description?: string;
+}
+
+export function FormField({
+  label,
+  error,
+  required,
+  description,
+  children,
+}: PropsWithChildren<FormFieldProps>) {
+  const id = useId();
+  const descriptionId = `${id}-description`;
+  const errorId = `${id}-error`;
+
+  return (
+    <div role="group" aria-labelledby={`${id}-label`}>
+      <label
+        id={`${id}-label`}
+        htmlFor={id}
+        className="block text-sm font-medium"
+      >
+        {label}
+        {required && (
+          <span aria-label="required" className="text-red-500 ml-1">
+            *
+          </span>
+        )}
+      </label>
+      
+      {description && (
+        <p
+          id={descriptionId}
+          className="text-sm text-gray-500"
+        >
+          {description}
+        </p>
+      )}
+      
+      {React.cloneElement(children as React.ReactElement, {
+        id,
+        'aria-describedby': description ? descriptionId : undefined,
+        'aria-invalid': error ? 'true' : undefined,
+        'aria-errormessage': error ? errorId : undefined,
+        required,
+      })}
+      
+      {error && (
+        <p
+          id={errorId}
+          className="text-sm text-red-500 mt-1"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Usage Example
+export function AccessibleForm() {
+  return (
+    <form
+      role="form"
+      aria-labelledby="form-title"
+      onSubmit={handleSubmit}
+    >
+      <h2 id="form-title">Contact Information</h2>
+      
+      <FormField
+        label="Email"
+        required
+        description="We'll never share your email."
+        error={errors.email}
+      >
+        <input
+          type="email"
+          className="form-input"
+          {...register('email')}
+        />
+      </FormField>
+      
+      <button
+        type="submit"
+        className="btn"
+        disabled={isSubmitting}
+        aria-busy={isSubmitting}
+      >
+        {isSubmitting ? 'Submitting...' : 'Submit'}
+      </button>
+    </form>
+  );
+}

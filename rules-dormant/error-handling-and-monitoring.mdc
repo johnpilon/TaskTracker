@@ -1,0 +1,213 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Comprehensive strategies for error handling, logging, and application monitoring in a Next.js application, covering custom error types, React Error Boundaries, API/tRPC error handling, and integration with Sentry for observability."
+glob: ["app/**/{error,global-error}.{ts,tsx,js,jsx}", "src/lib/errors/**/*.{ts,js}", "src/server/errors/**/*.{ts,js}", "app/api/**/route.{ts,js}", "src/server/api/routers/**/*.ts", "src/server/trpc/routers/**/*.ts", "sentry.{client,server,edge}.config.{ts,js}"]
+---
+
+# Error Handling and Monitoring Best Practices
+
+## Overview
+This document serves as the single source of truth for error handling, logging, and monitoring in our Next.js application. It covers error boundaries, logging strategies, monitoring tools, and integration with observability platforms.
+
+### Related Guides
+- For API error handling, see [API Best Practices](mdc:api-best-practices.mdc)
+- For tRPC error handling, see [tRPC Best Practices](mdc:trpc-best-practices.mdc)
+- For form validation errors, see [Zod Best Practices](mdc:zod-best-practices.mdc)
+- For database error handling, see [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+- For security-related errors, see [Security Best Practices](mdc:security-best-practices.mdc)
+- For testing error scenarios, see [Testing Best Practices](mdc:testing-best-practices.mdc)
+
+## Implementation Guidelines
+
+### Error Handling Strategy
+When implementing error handling, refer to these guides for specific scenarios:
+
+1. **API Errors**
+   - Follow patterns from [API Best Practices](mdc:api-best-practices.mdc)
+   - Use proper status codes and error messages
+   - Implement consistent error formats
+
+2. **Database Errors**
+   - Handle Supabase errors following [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+   - Implement proper error recovery
+   - Use appropriate error codes
+
+3. **Validation Errors**
+   - Use Zod validation following [Zod Best Practices](mdc:zod-best-practices.mdc)
+   - Implement proper form error handling
+   - Provide user-friendly error messages
+
+4. **Security Errors**
+   - Follow guidelines from [Security Best Practices](mdc:security-best-practices.mdc)
+   - Handle authentication/authorization errors
+   - Implement proper security logging
+
+## Key Principles
+
+1. Error Handling Strategy
+   - Catch errors at appropriate levels
+   - Provide meaningful error messages
+   - Implement proper fallbacks
+   - Log errors for debugging
+
+2. Monitoring and Observability
+   - Track errors in production
+   - Monitor performance metrics
+   - Set up proper alerting
+   - Maintain error context
+
+3. Logging Strategy
+   - Structured logging
+   - Proper log levels
+   - Context preservation
+   - PII handling
+
+## Error Handling Implementation
+
+### Application Error Types
+
+```typescript
+// lib/errors/index.ts
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode: number,
+    public details?: unknown
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(message, 'VALIDATION_ERROR', 400, details);
+  }
+}
+
+export class AuthenticationError extends AppError {
+  constructor(message: string = 'Not authenticated') {
+    super(message, 'AUTHENTICATION_ERROR', 401);
+  }
+}
+
+export class AuthorizationError extends AppError {
+  constructor(message: string = 'Not authorized') {
+    super(message, 'AUTHORIZATION_ERROR', 403);
+  }
+}
+```
+
+### Error Boundaries
+
+```typescript
+// app/error.tsx
+'use client';
+
+import { useEffect } from 'react';
+import * as Sentry from '@sentry/nextjs';
+
+export default function GlobalError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    Sentry.captureException(error);
+  }, [error]);
+
+  return (
+    <div className="error-boundary">
+      <h2>Something went wrong</h2>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+```
+
+### API Error Handling
+
+```typescript
+// lib/api/error-handler.ts
+import { AppError } from '@/lib/errors';
+import * as Sentry from '@sentry/nextjs';
+
+export function handleApiError(error: unknown) {
+  // Log error
+  Sentry.captureException(error);
+
+  if (error instanceof AppError) {
+    return Response.json(
+      { error: { code: error.code, message: error.message } },
+      { status: error.statusCode }
+    );
+  }
+
+  // Don't expose internal errors
+  return Response.json(
+    { error: { code: 'INTERNAL_ERROR', message: 'An internal error occurred' } },
+    { status: 500 }
+  );
+}
+
+// Usage in API route
+export async function POST(req: Request) {
+  try {
+    const data = await processRequest(req);
+    return Response.json(data);
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+```
+
+### tRPC Error Handling
+
+```typescript
+// server/api/trpc.ts
+import { initTRPC, TRPCError } from '@trpc/server';
+import * as Sentry from '@sentry/nextjs';
+
+export const handleTRPCError = (error: unknown) => {
+  // Log error
+  Sentry.captureException(error);
+
+  if (error instanceof AppError) {
+    throw new TRPCError({
+      code: mapErrorCodeToTRPC(error.code),
+      message: error.message,
+    });
+  }
+
+  throw new TRPCError({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'An internal error occurred',
+  });
+};
+
+// Usage in procedure
+export const userRouter = router({
+  updateProfile: protectedProcedure
+    .input(updateProfileSchema)
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await updateUserProfile(ctx, input);
+      } catch (error) {
+        handleTRPCError(error);
+      }
+    }),
+});
+```
+
+## Monitoring Implementation
+
+### Sentry Configuration
+
+```

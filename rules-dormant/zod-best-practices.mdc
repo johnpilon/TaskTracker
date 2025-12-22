@@ -1,0 +1,491 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Best practices for using Zod for data validation and schema definition in TypeScript projects. Covers schema creation (base, extended, composed), error handling (custom messages, formatting), data transformations, and integration with React Hook Form and API endpoints."
+glob: ["src/lib/validations/**/*.{ts,js}", "src/schemas/**/*.{ts,js}", "src/server/schemas/**/*.{ts,js}", "app/api/**/route.{ts,js}", "src/server/api/routers/**/*.ts", "src/server/trpc/routers/**/*.ts", "**/*form*/**/*.{ts,tsx,js,jsx}", "**/*schema*.{ts,js}"]
+---
+
+# Zod Best Practices
+
+## Overview
+This document outlines best practices for using Zod in our Next.js application for runtime type checking, validation, and data transformation. Zod helps ensure type safety and data integrity across our application.
+
+## Key Principles
+
+1. Type Safety
+2. Schema Reusability
+3. Error Handling
+4. Performance
+5. Integration with Forms and APIs
+
+## Implementation Guidelines
+
+### Schema Definition
+
+```typescript
+// ✅ DO: Create reusable base schemas
+const emailSchema = z.string().email('Invalid email address').toLowerCase();
+const passwordSchema = z.string()
+  .min(8, 'Password must be at least 8 characters')
+  .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+  .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+  .regex(/[0-9]/, 'Password must contain at least one number');
+
+const userBaseSchema = z.object({
+  id: z.string().uuid(),
+  email: emailSchema,
+  name: z.string().min(2, 'Name must be at least 2 characters'),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+// ✅ DO: Extend base schemas for specific use cases
+const createUserSchema = userBaseSchema.omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true 
+}).extend({
+  password: passwordSchema,
+  confirmPassword: z.string(),
+}).refine(
+  (data) => data.password === data.confirmPassword,
+  {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  }
+);
+
+// ❌ DON'T: Duplicate schema logic
+const badUserSchema = z.object({
+  email: z.string().email(), // Missing error message and transformation
+  password: z.string().min(8), // Incomplete validation
+});
+```
+
+### Error Handling
+
+```typescript
+// ✅ DO: Implement proper error handling with custom messages
+const profileSchema = z.object({
+  bio: z.string()
+    .min(10, 'Bio must be at least 10 characters')
+    .max(500, 'Bio cannot exceed 500 characters')
+    .optional()
+    .transform(text => text?.trim()),
+  age: z.number()
+    .int('Age must be a whole number')
+    .min(18, 'Must be at least 18 years old')
+    .max(120, 'Invalid age'),
+  website: z.string()
+    .url('Invalid website URL')
+    .optional()
+    .transform(url => url?.toLowerCase()),
+}).superRefine((data, ctx) => {
+  // Custom validation logic
+  if (data.age < 18 && data.website) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Website not allowed for users under 18',
+      path: ['website'],
+    });
+  }
+});
+
+// ✅ DO: Format error messages consistently
+function formatZodError(error: z.ZodError) {
+  return error.errors.reduce((acc, err) => {
+    const path = err.path.join('.');
+    return {
+      ...acc,
+      [path]: err.message,
+    };
+  }, {});
+}
+
+// ❌ DON'T: Swallow validation errors
+function badErrorHandling(data: unknown) {
+  try {
+    return userSchema.parse(data);
+  } catch {
+    return null; // Bad: Loses error information
+  }
+}
+```
+
+### Data Transformation
+
+```typescript
+// ✅ DO: Use transformations to clean and normalize data
+const formDataSchema = z.object({
+  email: z.string()
+    .email('Invalid email')
+    .toLowerCase()
+    .trim(),
+  tags: z.string()
+    .transform(str => 
+      str.split(',')
+        .map(tag => tag.trim())
+        .filter(Boolean)
+    ),
+  phone: z.string()
+    .regex(/^\+?[\d\s-()]+$/, 'Invalid phone number')
+    .transform(num => num.replace(/[^\d+]/g, '')),
+  preferences: z.record(z.boolean())
+    .transform(prefs => 
+      Object.entries(prefs)
+        .filter(([_, value]) => value)
+        .map(([key]) => key)
+    ),
+});
+
+// ❌ DON'T: Perform transformations outside schema
+function badTransformation(data: unknown) {
+  const result = userSchema.parse(data);
+  // Bad: Transform after validation
+  result.email = result.email.toLowerCase();
+  return result;
+}
+```
+
+### Schema Composition
+
+```typescript
+// ✅ DO: Compose schemas for complex types
+const addressSchema = z.object({
+  street: z.string().min(1, 'Street is required'),
+  city: z.string().min(1, 'City is required'),
+  state: z.string().length(2, 'Invalid state code'),
+  zip: z.string().regex(/^\d{5}(-\d{4})?$/, 'Invalid ZIP code'),
+});
+
+const contactSchema = z.object({
+  email: emailSchema,
+  phone: z.string().optional(),
+  address: addressSchema,
+});
+
+const orderSchema = z.object({
+  id: z.string().uuid(),
+  items: z.array(z.object({
+    productId: z.string().uuid(),
+    quantity: z.number().int().positive(),
+    price: z.number().positive(),
+  })).min(1, 'Order must contain at least one item'),
+  contact: contactSchema,
+  billing: addressSchema,
+  shipping: addressSchema,
+}).transform(order => ({
+  ...order,
+  total: order.items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+}));
+
+// ❌ DON'T: Create monolithic schemas
+const badOrderSchema = z.object({
+  id: z.string(),
+  itemProductIds: z.array(z.string()),
+  itemQuantities: z.array(z.number()),
+  itemPrices: z.array(z.number()),
+  // ... all fields flat in one schema
+});
+```
+
+### Integration with React Hook Form
+
+```typescript
+// ✅ DO: Use Zod with React Hook Form
+function ProfileForm() {
+  const form = useForm<z.infer<typeof profileSchema>>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: {
+      bio: '',
+      age: undefined,
+      website: '',
+    },
+  });
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)}>
+        {/* Form fields */}
+      </form>
+    </Form>
+  );
+}
+
+// ✅ DO: Create type-safe API endpoints
+interface ApiResponse<T> {
+  data?: T;
+  error?: string;
+}
+
+async function createUser(
+  data: z.infer<typeof createUserSchema>
+): Promise<ApiResponse<z.infer<typeof userBaseSchema>>> {
+  try {
+    const validated = createUserSchema.parse(data);
+    // Process validated data
+    return { data: /* created user */ };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return { error: formatZodError(error) };
+    }
+    throw error;
+  }
+}
+```
+
+## Best Practices
+
+1. **Schema Design**
+   - Create reusable base schemas
+   - Use schema composition
+   - Implement proper transformations
+   - Add descriptive error messages
+   - Use refinements for complex validation
+
+2. **Type Safety**
+   - Use z.infer for TypeScript types
+   - Validate unknown data
+   - Handle optional fields properly
+   - Implement proper coercion
+   - Use strict mode when needed
+
+3. **Error Handling**
+   - Provide clear error messages
+   - Use proper error formatting
+   - Implement custom error handling
+   - Use refinements for complex validation
+   - Handle nested errors properly
+
+4. **Performance**
+   - Reuse schema instances
+   - Use appropriate parsing methods
+   - Implement caching when needed
+   - Optimize transformations
+   - Use async validation wisely
+
+5. **Integration**
+   - Use with React Hook Form
+   - Implement API validation
+   - Handle form submission
+   - Validate environment variables
+   - Integrate with tRPC
+
+## Example Implementation
+
+```typescript
+// Complete schema implementation example
+const userSchema = {
+  // Base schemas
+  id: z.string().uuid(),
+  email: z.string()
+    .email('Invalid email address')
+    .toLowerCase()
+    .trim(),
+  password: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Must contain uppercase letter')
+    .regex(/[a-z]/, 'Must contain lowercase letter')
+    .regex(/[0-9]/, 'Must contain number'),
+  
+  // Profile schema
+  profile: z.object({
+    name: z.string()
+      .min(2, 'Name must be at least 2 characters')
+      .max(50, 'Name cannot exceed 50 characters')
+      .transform(name => 
+        name
+          .trim()
+          .split(' ')
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+          .join(' ')
+      ),
+    bio: z.string()
+      .max(500, 'Bio cannot exceed 500 characters')
+      .optional()
+      .transform(text => text?.trim()),
+    birthDate: z.date()
+      .refine(
+        date => {
+          const age = differenceInYears(new Date(), date);
+          return age >= 18;
+        },
+        'Must be at least 18 years old'
+      ),
+    avatar: z.string()
+      .url('Invalid avatar URL')
+      .optional(),
+  }),
+  
+  // Settings schema
+  settings: z.object({
+    theme: z.enum(['light', 'dark', 'system']),
+    notifications: z.object({
+      email: z.boolean(),
+      push: z.boolean(),
+      marketing: z.boolean(),
+    }),
+    privacy: z.object({
+      profileVisibility: z.enum(['public', 'private', 'friends']),
+      showEmail: z.boolean(),
+      showBirthDate: z.boolean(),
+    }),
+  }).default({
+    theme: 'system',
+    notifications: {
+      email: true,
+      push: true,
+      marketing: false,
+    },
+    privacy: {
+      profileVisibility: 'public',
+      showEmail: false,
+      showBirthDate: false,
+    },
+  }),
+};
+
+// Create schemas for different operations
+const createUserSchema = z.object({
+  email: userSchema.email,
+  password: userSchema.password,
+  confirmPassword: z.string(),
+}).refine(
+  data => data.password === data.confirmPassword,
+  {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  }
+);
+
+const updateProfileSchema = z.object({
+  profile: userSchema.profile,
+}).partial();
+
+const updateSettingsSchema = z.object({
+  settings: userSchema.settings,
+}).partial();
+
+// Type inference
+type User = z.infer<typeof userSchema>;
+type CreateUserInput = z.infer<typeof createUserSchema>;
+type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+
+// API implementation
+async function updateProfile(
+  userId: string,
+  data: UpdateProfileInput
+): Promise<ApiResponse<User>> {
+  try {
+    const validated = updateProfileSchema.parse(data);
+    
+    // Process validated data
+    const updatedUser = await db.user.update({
+      where: { id: userId },
+      data: validated,
+    });
+    
+    return { data: updatedUser };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return {
+        error: formatZodError(error),
+      };
+    }
+    
+    // Handle other errors
+    console.error('Failed to update profile:', error);
+    return {
+      error: 'Failed to update profile. Please try again.',
+    };
+  }
+}
+
+// Form implementation
+function ProfileForm() {
+  const form = useForm<UpdateProfileInput>({
+    resolver: zodResolver(updateProfileSchema),
+  });
+
+  const onSubmit = async (data: UpdateProfileInput) => {
+    try {
+      const result = await updateProfile(userId, data);
+      
+      if (result.error) {
+        // Handle validation errors
+        Object.entries(result.error).forEach(([path, message]) => {
+          form.setError(path as any, { message });
+        });
+        return;
+      }
+      
+      // Handle success
+      toast.success('Profile updated successfully');
+    } catch (error) {
+      // Handle unexpected errors
+      toast.error('Failed to update profile');
+    }
+  };
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)}>
+        <FormField
+          control={form.control}
+          name="profile.name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Name</FormLabel>
+              <FormControl>
+                <Input {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        
+        <FormField
+          control={form.control}
+          name="profile.bio"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Bio</FormLabel>
+              <FormControl>
+                <Textarea {...field} />
+              </FormControl>
+              <FormDescription>
+                Tell us about yourself
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        
+        <FormField
+          control={form.control}
+          name="profile.birthDate"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Birth Date</FormLabel>
+              <FormControl>
+                <DatePicker
+                  selected={field.value}
+                  onChange={field.onChange}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        
+        <Button type="submit">
+          Update Profile
+        </Button>
+      </form>
+    </Form>
+  );
+}

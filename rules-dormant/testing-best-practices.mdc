@@ -1,0 +1,267 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "A unified guide to testing in a Next.js application, covering Vitest for unit and integration testing (React components, API routes, database operations) and Playwright for end-to-end testing. Emphasizes the test pyramid, test independence, and coverage."
+glob: ["**/*.test.{ts,tsx,js,jsx}", "**/*.spec.{ts,tsx,js,jsx}", "**/__tests__/**/*.{ts,tsx,js,jsx}", "playwright.config.{ts,js}", "vitest.config.{ts,js}", "src/__tests__/utils/**/*.{ts,tsx,js,jsx}", "tests/utils/**/*.{ts,tsx,js,jsx}", "tests/e2e/**/*.spec.{ts,js}", "tests/playwright/**/*.ts"]
+---
+
+# Testing Best Practices
+
+## Overview
+
+This guide outlines comprehensive testing practices for our Next.js application, covering unit testing, integration testing, and end-to-end testing approaches.
+
+## Key Principles
+
+1. **Test Pyramid**
+   - More unit tests than integration tests
+   - More integration tests than E2E tests
+   - Focus on testing business logic
+
+2. **Test Independence**
+   - Each test should be independent
+   - No shared state between tests
+   - Clear setup and teardown
+
+3. **Test Coverage**
+   - Aim for high coverage of business logic
+   - Focus on critical paths
+   - Balance coverage with maintenance cost
+
+## React Component Testing
+
+### Unit Testing Components
+
+```typescript
+// components/UserProfile/__tests__/UserProfile.test.tsx
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { UserProfile } from '../UserProfile';
+import { createWrapper } from '@/test/utils';
+
+describe('UserProfile', () => {
+  it('renders user information correctly', async () => {
+    const mockUser = {
+      id: '1',
+      name: 'John Doe',
+      email: 'john@example.com',
+      avatarUrl: '/avatar.jpg',
+    };
+
+    render(
+      <UserProfile userId={mockUser.id} />,
+      { wrapper: createWrapper() }
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(mockUser.name)).toBeInTheDocument();
+      expect(screen.getByText(mockUser.email)).toBeInTheDocument();
+    });
+  });
+
+  it('handles form submission correctly', async () => {
+    const user = userEvent.setup();
+    const mockUser = {
+      id: '1',
+      name: 'John Doe',
+      email: 'john@example.com',
+    };
+
+    render(
+      <UserProfile userId={mockUser.id} />,
+      { wrapper: createWrapper() }
+    );
+
+    await user.type(
+      screen.getByLabelText(/name/i),
+      'Jane Doe'
+    );
+
+    await user.click(screen.getByRole('button', { name: /submit/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Jane Doe')).toBeInTheDocument();
+    });
+  });
+});
+```
+
+### Integration Testing
+
+```typescript
+// tests/integration/UserFlow.test.tsx
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { UserDashboard } from '@/components/UserDashboard';
+import { createWrapper } from '@/test/utils';
+
+describe('User Flow', () => {
+  it('completes the full user journey', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <UserDashboard />,
+      { wrapper: createWrapper() }
+    );
+
+    // Navigate to profile
+    await user.click(screen.getByRole('link', { name: /profile/i }));
+
+    // Update profile
+    await user.type(
+      screen.getByLabelText(/name/i),
+      'New Name'
+    );
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    // Verify changes
+    await waitFor(() => {
+      expect(screen.getByText('New Name')).toBeInTheDocument();
+      expect(screen.getByText(/saved successfully/i)).toBeInTheDocument();
+    });
+  });
+});
+```
+
+## API Testing
+
+### Unit Testing API Routes
+
+```typescript
+// __tests__/api/users.test.ts
+import { createMocks } from 'node-mocks-http';
+import { userRouter } from '@/server/api/routers/user';
+import { createInnerTRPCContext } from '@/server/api/trpc';
+
+describe('User API', () => {
+  it('returns user data correctly', async () => {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { id: '1' },
+    });
+
+    const ctx = createInnerTRPCContext({ req, res });
+    const result = await userRouter.createCaller(ctx).getUser({ id: '1' });
+
+    expect(result).toMatchObject({
+      id: '1',
+      name: expect.any(String),
+      email: expect.any(String),
+    });
+  });
+});
+```
+
+## Database Testing
+
+### Testing Database Operations
+
+```typescript
+// __tests__/db/users.test.ts
+import { db } from '@/server/db';
+import { createUser, getUserById } from '@/server/db/users';
+
+describe('User Database Operations', () => {
+  beforeEach(async () => {
+    await db.execute(sql`DELETE FROM users`);
+  });
+
+  it('creates and retrieves a user correctly', async () => {
+    const userData = {
+      name: 'Test User',
+      email: 'test@example.com',
+    };
+
+    const createdUser = await createUser(userData);
+    const retrievedUser = await getUserById(createdUser.id);
+
+    expect(retrievedUser).toMatchObject(userData);
+  });
+});
+```
+
+## End-to-End Testing
+
+### Playwright Tests
+
+```typescript
+// tests/e2e/auth.spec.ts
+import { test, expect } from '@playwright/test';
+
+test('user can sign up and login', async ({ page }) => {
+  // Sign up
+  await page.goto('/signup');
+  await page.fill('[name="email"]', 'test@example.com');
+  await page.fill('[name="password"]', 'password123');
+  await page.click('button[type="submit"]');
+  
+  // Verify redirect to dashboard
+  await expect(page).toHaveURL('/dashboard');
+  
+  // Verify user is logged in
+  const userName = await page.textContent('[data-testid="user-name"]');
+  expect(userName).toBe('Test User');
+});
+```
+
+## Best Practices Summary
+
+1. **Component Testing**
+   - Test component rendering
+   - Test user interactions
+   - Test error states
+   - Test loading states
+   - Mock external dependencies
+
+2. **Integration Testing**
+   - Test complete user flows
+   - Test component integration
+   - Test data persistence
+   - Test error handling
+   - Test performance
+
+3. **API Testing**
+   - Test route handlers
+   - Test input validation
+   - Test error responses
+   - Test authentication
+   - Test rate limiting
+
+4. **Database Testing**
+   - Test CRUD operations
+   - Test constraints
+   - Test transactions
+   - Test migrations
+   - Test data integrity
+
+5. **E2E Testing**
+   - Test critical user journeys
+   - Test cross-browser compatibility
+   - Test responsive design
+   - Test performance metrics
+   - Test accessibility
+
+## Testing Tools
+
+1. **Unit Testing**
+   - Jest
+   - React Testing Library
+   - MSW (Mock Service Worker)
+
+2. **Integration Testing**
+   - Supertest
+   - Database testing utilities
+   - Custom test helpers
+
+3. **E2E Testing**
+   - Playwright
+   - Cypress
+   - Lighthouse
+
+4. **Test Utilities**
+   - Test database setup
+   - Mock data generators
+   - Custom test renderers

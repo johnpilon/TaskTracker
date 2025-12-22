@@ -1,0 +1,327 @@
+---
+description: Best practices for using Drizzle ORM with PostgreSQL
+globs: **/*.{ts,tsx}
+alwaysApply: false
+---
+---
+description: "Best practices for using Drizzle ORM with PostgreSQL, covering schema definition (tables, relations, Zod schemas), efficient query patterns, clear migration strategies, transactions, and ensuring type safety."
+glob: ["src/db/schema/**/*.{ts,js}", "src/lib/db/schema.{ts,js}", "src/server/db/schema.{ts,js}", "src/db/migrations/**/*.{ts,js,sql}", "src/lib/db/queries.{ts,js}", "src/server/db/queries.{ts,js}", "drizzle.config.{ts,js}", "src/lib/drizzle/**/*.{ts,js}", "src/server/lib/drizzle/**/*.{ts,js}"]
+---
+
+# Drizzle ORM Best Practices
+
+## Overview
+This document outlines best practices for using Drizzle ORM in our Next.js application for efficient database operations and type safety.
+
+## Key Principles
+
+1. Type Safety - Leverage TypeScript integration
+2. Performance - Optimize query patterns
+3. Migrations - Maintain clean migration history
+4. Relations - Define proper relationships
+5. Validation - Implement schema validation
+
+## Implementation Guidelines
+
+### Schema Definition
+
+```typescript
+// ✅ DO: Use proper type definitions and schema organization
+import { pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+// Define tables with proper types and constraints
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// Define relations
+export const usersRelations = relations(users, ({ many }) => ({
+  posts: many(posts),
+  comments: many(comments),
+}));
+
+// Create Zod schemas for validation
+export const insertUserSchema = createInsertSchema(users);
+export const selectUserSchema = createSelectSchema(users);
+
+// ❌ DON'T: Mix concerns or skip type safety
+const badUsers = pgTable('users', {
+  id: text('id'), // Missing proper UUID type
+  email: text('email'), // Missing constraints
+  created: timestamp('created'), // Inconsistent naming
+});
+```
+
+### Query Patterns
+
+```typescript
+// ✅ DO: Use efficient query patterns
+async function getUserWithPosts(userId: string) {
+  return await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    with: {
+      posts: {
+        limit: 10,
+        orderBy: desc(posts.createdAt),
+      },
+    },
+  });
+}
+
+// ❌ DON'T: Use inefficient queries
+async function badGetUserWithPosts(userId: string) {
+  const user = await db.select().from(users).where(eq(users.id, userId));
+  // N+1 problem: separate query for posts
+  const userPosts = await db.select().from(posts).where(eq(posts.userId, userId));
+  return { ...user[0], posts: userPosts };
+}
+```
+
+### Migrations
+
+```typescript
+// ✅ DO: Write clear, reversible migrations
+import { sql } from 'drizzle-orm';
+
+export async function up(db: Database) {
+  await db.schema
+    .createTable('categories')
+    .addColumn('id', 'uuid', (col) => col.primaryKey().defaultRandom())
+    .addColumn('name', 'text', (col) => col.notNull())
+    .addColumn('created_at', 'timestamp', (col) => 
+      col.notNull().defaultNow()
+    )
+    .execute();
+    
+  await db.schema
+    .alterTable('posts')
+    .addColumn('category_id', 'uuid', (col) => 
+      col.references('categories.id').onDelete('set null')
+    )
+    .execute();
+}
+
+export async function down(db: Database) {
+  await db.schema
+    .alterTable('posts')
+    .dropColumn('category_id')
+    .execute();
+    
+  await db.schema
+    .dropTable('categories')
+    .execute();
+}
+
+// ❌ DON'T: Write irreversible migrations or skip constraints
+export async function badMigration(db: Database) {
+  await sql`ALTER TABLE posts DROP COLUMN category`; // Hard to reverse
+  await sql`CREATE TABLE categories (id TEXT)`; // Missing constraints
+}
+```
+
+### Transactions
+
+```typescript
+// ✅ DO: Use transactions for atomic operations
+async function createUserWithProfile(data: NewUser) {
+  return await db.transaction(async (tx) => {
+    const user = await tx
+      .insert(users)
+      .values(data.user)
+      .returning();
+      
+    const profile = await tx
+      .insert(profiles)
+      .values({ ...data.profile, userId: user[0].id })
+      .returning();
+      
+    return { user: user[0], profile: profile[0] };
+  });
+}
+
+// ❌ DON'T: Skip transactions for related operations
+async function badCreateUserWithProfile(data: NewUser) {
+  const user = await db.insert(users).values(data.user);
+  // Could fail, leaving orphaned user
+  const profile = await db.insert(profiles).values(data.profile);
+}
+```
+
+## Best Practices
+
+1. **Schema Design**
+   - Use appropriate column types
+   - Define proper constraints
+   - Implement consistent naming
+   - Create proper indexes
+
+2. **Query Optimization**
+   - Use prepared statements
+   - Avoid N+1 queries
+   - Implement proper pagination
+   - Use appropriate joins
+
+3. **Type Safety**
+   - Leverage TypeScript
+   - Use Zod validation
+   - Define proper relations
+   - Maintain type consistency
+
+4. **Performance**
+   - Use query builders
+   - Implement proper indexes
+   - Optimize join operations
+   - Use transactions appropriately
+
+5. **Migrations**
+   - Write reversible migrations
+   - Use proper constraints
+   - Maintain clean history
+   - Test migrations thoroughly
+
+## Example Implementation
+
+```typescript
+// Schema Definition
+import { pgTable, text, timestamp, uuid, integer } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { createInsertSchema } from 'drizzle-zod';
+import { z } from 'zod';
+
+// Tables
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at')
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
+export const profiles = pgTable('profiles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  bio: text('bio'),
+  avatarUrl: text('avatar_url'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at')
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
+export const posts = pgTable('posts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  published: boolean('published').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at')
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
+// Relations
+export const usersRelations = relations(users, ({ one, many }) => ({
+  profile: one(profiles, {
+    fields: [users.id],
+    references: [profiles.userId],
+  }),
+  posts: many(posts),
+}));
+
+export const postsRelations = relations(posts, ({ one }) => ({
+  author: one(users, {
+    fields: [posts.userId],
+    references: [users.id],
+  }),
+}));
+
+// Validation Schemas
+export const insertUserSchema = createInsertSchema(users).extend({
+  email: z.string().email(),
+  name: z.string().min(2),
+});
+
+export const insertProfileSchema = createInsertSchema(profiles);
+export const insertPostSchema = createInsertSchema(posts);
+
+// Query Functions
+export async function getUserWithRelations(userId: string) {
+  return await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    with: {
+      profile: true,
+      posts: {
+        where: eq(posts.published, true),
+        orderBy: desc(posts.createdAt),
+        limit: 10,
+      },
+    },
+  });
+}
+
+export async function createUserWithProfile(
+  data: z.infer<typeof insertUserSchema> & {
+    profile: z.infer<typeof insertProfileSchema>;
+  }
+) {
+  return await db.transaction(async (tx) => {
+    const [user] = await tx
+      .insert(users)
+      .values(data)
+      .returning();
+      
+    const [profile] = await tx
+      .insert(profiles)
+      .values({
+        ...data.profile,
+        userId: user.id,
+      })
+      .returning();
+      
+    return { user, profile };
+  });
+}
+
+export async function updateUserWithProfile(
+  userId: string,
+  data: Partial<z.infer<typeof insertUserSchema>> & {
+    profile?: Partial<z.infer<typeof insertProfileSchema>>;
+  }
+) {
+  return await db.transaction(async (tx) => {
+    if (Object.keys(data).length > 0) {
+      await tx
+        .update(users)
+        .set({
+          ...data,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    }
+    
+    if (data.profile) {
+      await tx
+        .update(profiles)
+        .set({
+          ...data.profile,
+          updatedAt: new Date(),
+        })
+        .where(eq(profiles.userId, userId));
+    }
+    
+    return await getUserWithRelations(userId);
+  });
+}

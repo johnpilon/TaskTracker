@@ -1,0 +1,403 @@
+---
+description: TypeScript coding standards and type safety guidelines
+globs: **/*.{ts,tsx}
+alwaysApply: false
+---
+---
+description: "TypeScript coding standards and best practices for building robust and maintainable applications, focusing on type safety (definitions, function types, type guards, utility types), code quality, error prevention, and integration with frameworks like React and Next.js."
+glob: ["**/*.{ts,tsx}", "!**/*.test.{ts,tsx}", "!**/*.spec.{ts,tsx}", "!**/__tests__/**", "!**/node_modules/**"]
+---
+
+# TypeScript Best Practices
+
+## Overview
+This document outlines best practices for using TypeScript in our Next.js application for type safety and maintainable code.
+
+## Key Principles
+
+1. Type Safety - Leverage TypeScript's type system
+2. Code Quality - Write maintainable and readable code
+3. Performance - Optimize compilation and runtime
+4. Error Prevention - Catch errors at compile time
+5. Documentation - Use types as documentation
+
+## Implementation Guidelines
+
+### Type Definitions
+
+```typescript
+// ✅ DO: Use proper type definitions
+// Define explicit interfaces for objects
+interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'user';
+  preferences?: UserPreferences;
+  createdAt: Date;
+}
+
+// Use type aliases for unions and complex types
+type UserRole = 'admin' | 'user' | 'guest';
+type UserId = string;
+type UserMap = Map<UserId, User>;
+
+// Use generics for reusable types
+interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  hasMore: boolean;
+}
+
+// ❌ DON'T: Use loose types
+// Avoid any
+function badFunction(data: any) {
+  return data.someProperty; // Unsafe
+}
+
+// Avoid object
+function alsoBAd(data: object) {
+  return data.id; // Error: Property 'id' does not exist on type 'object'
+}
+```
+
+### Function Types
+
+```typescript
+// ✅ DO: Use proper function types
+// Define function interfaces
+interface FetchUserFn {
+  (id: string): Promise<User>;
+}
+
+// Use type parameters for generic functions
+async function fetchData<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  return response.json();
+}
+
+// Define callback types
+type ErrorHandler = (error: Error) => void;
+type SuccessHandler<T> = (data: T) => void;
+
+// Use function overloads for complex scenarios
+function createElement(tag: 'a'): HTMLAnchorElement;
+function createElement(tag: 'div'): HTMLDivElement;
+function createElement(tag: string): HTMLElement {
+  return document.createElement(tag);
+}
+
+// ❌ DON'T: Use loose function types
+// Avoid Function type
+const badCallback: Function = () => {}; // Too loose
+
+// Avoid any for parameters
+function badHandler(event: any) { // Unsafe
+  console.log(event.target);
+}
+```
+
+### Type Guards
+
+```typescript
+// ✅ DO: Use type guards for runtime checks
+// User-defined type guards
+function isUser(value: unknown): value is User {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'email' in value &&
+    'name' in value
+  );
+}
+
+// Use type guards with unions
+type ApiResponse<T> = 
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: string };
+
+function isSuccessResponse<T>(
+  response: ApiResponse<T>
+): response is { status: 'success'; data: T } {
+  return response.status === 'success';
+}
+
+// Handle errors with type guards
+function handleResponse<T>(response: ApiResponse<T>) {
+  if (isSuccessResponse(response)) {
+    return response.data; // T
+  } else {
+    throw new Error(response.error);
+  }
+}
+
+// ❌ DON'T: Use type assertions without checks
+function badHandling(data: unknown) {
+  return (data as User).email; // Unsafe
+}
+```
+
+### Utility Types
+
+```typescript
+// ✅ DO: Use utility types effectively
+// Partial for optional updates
+type UserUpdate = Partial<User>;
+
+// Pick for selecting properties
+type UserCredentials = Pick<User, 'email' | 'password'>;
+
+// Omit for excluding properties
+type PublicUser = Omit<User, 'password' | 'secretKey'>;
+
+// Record for mapped types
+type UserRoles = Record<UserId, UserRole>;
+
+// Required for making all properties required
+type StrictUser = Required<User>;
+
+// ❌ DON'T: Reimplement utility types
+// Don't do this
+type BadPartial<T> = {
+  [P in keyof T]?: T[P];
+};
+```
+
+## Best Practices
+
+1. **Type Safety**
+   - Enable strict mode
+   - Avoid type assertions
+   - Use proper type guards
+   - Leverage utility types
+
+2. **Code Organization**
+   - Group related types
+   - Use barrel exports
+   - Create type libraries
+   - Document complex types
+
+3. **Error Prevention**
+   - Use discriminated unions
+   - Implement type guards
+   - Handle null/undefined
+   - Validate API responses
+
+4. **Performance**
+   - Use type imports
+   - Avoid large unions
+   - Optimize generics
+   - Use const assertions
+
+5. **Documentation**
+   - Document public APIs
+   - Use JSDoc comments
+   - Provide examples
+   - Explain complex types
+
+## Example Implementation
+
+```typescript
+// Types
+interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  preferences?: UserPreferences;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface UserPreferences {
+  theme: 'light' | 'dark';
+  notifications: boolean;
+  language: string;
+}
+
+type UserRole = 'admin' | 'user' | 'guest';
+type UserId = string;
+
+// API Response Types
+interface ApiResponse<T> {
+  data: T;
+  meta: {
+    timestamp: number;
+    requestId: string;
+  };
+}
+
+type ApiError = {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+type ApiResult<T> = 
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: ApiError };
+
+// Type Guards
+function isApiError(value: unknown): value is ApiError {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    'message' in value
+  );
+}
+
+function isSuccessResult<T>(
+  result: ApiResult<T>
+): result is { status: 'success'; data: T } {
+  return result.status === 'success';
+}
+
+// Utility Functions
+async function fetchUser(id: UserId): Promise<ApiResult<User>> {
+  try {
+    const response = await fetch(`/api/users/${id}`);
+    const data: ApiResponse<User> = await response.json();
+    
+    return {
+      status: 'success',
+      data: data.data,
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      error: isApiError(error) ? error : {
+        code: 'UNKNOWN_ERROR',
+        message: 'An unknown error occurred',
+      },
+    };
+  }
+}
+
+// React Component Types
+interface UserProfileProps {
+  userId: UserId;
+  onUpdate?: (user: User) => void;
+  onError?: (error: ApiError) => void;
+}
+
+function UserProfile({
+  userId,
+  onUpdate,
+  onError,
+}: UserProfileProps) {
+  const [user, setUser] = useState<User | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  
+  useEffect(() => {
+    async function loadUser() {
+      const result = await fetchUser(userId);
+      
+      if (isSuccessResult(result)) {
+        setUser(result.data);
+        onUpdate?.(result.data);
+      } else {
+        setError(result.error);
+        onError?.(result.error);
+      }
+    }
+    
+    loadUser();
+  }, [userId, onUpdate, onError]);
+  
+  if (error) {
+    return (
+      <ErrorDisplay
+        code={error.code}
+        message={error.message}
+      />
+    );
+  }
+  
+  if (!user) {
+    return <LoadingSpinner />;
+  }
+  
+  return (
+    <div>
+      <h1>{user.name}</h1>
+      <p>{user.email}</p>
+      {/* More user details */}
+    </div>
+  );
+}
+
+// Custom Hooks with TypeScript
+function useUser(userId: UserId) {
+  // Type inference works automatically
+  const query = useQuery({
+    queryKey: ['user', userId],
+    queryFn: () => fetchUser(userId),
+    select: (result) => {
+      if (isSuccessResult(result)) {
+        return result.data;
+      }
+      throw result.error;
+    },
+  });
+  
+  return query;
+}
+
+// Zod Schema with TypeScript
+const userSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string().min(2),
+  role: z.enum(['admin', 'user', 'guest']),
+  preferences: z.object({
+    theme: z.enum(['light', 'dark']),
+    notifications: z.boolean(),
+    language: z.string(),
+  }).optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+// Infer types from schema
+type UserFromSchema = z.infer<typeof userSchema>;
+
+// Validate unknown data
+function validateUser(data: unknown): User {
+  return userSchema.parse(data);
+}
+
+// API Handler with TypeScript
+async function handleUpdateUser(
+  req: NextApiRequest,
+  res: NextApiResponse<ApiResult<User>>
+) {
+  try {
+    const userId = req.query.id as string;
+    const updates = userSchema.partial().parse(req.body);
+    
+    const user = await db.user.update({
+      where: { id: userId },
+      data: updates,
+    });
+    
+    return res.json({
+      status: 'success',
+      data: user,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'error',
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'Invalid user data',
+        details: error instanceof Error ? {
+          message: error.message,
+        } : undefined,
+      },
+    });
+  }
+}
+``` 

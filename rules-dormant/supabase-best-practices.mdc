@@ -1,0 +1,463 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Best practices for using Supabase, covering authentication (client, server-side, middleware), database functions (SQL), edge functions (Deno/TypeScript), Row Level Security (RLS) policies, and database migrations."
+glob: ["src/lib/supabase/**/*.{ts,js}", "src/server/supabase/**/*.{ts,js}", "src/lib/auth/**/*.{ts,js}", "src/server/auth/**/*.{ts,js}", "app/api/**/route.{ts,js}", "middleware.ts", "supabase/migrations/**/*.sql", "supabase/functions/**/*.ts", "src/app/(auth)/**/*.{ts,tsx}", "src/app/api/auth/**/*.{ts,js}"]
+---
+
+# Supabase Best Practices
+
+## Overview
+This document consolidates all best practices for working with Supabase in our Next.js application, including authentication, database functions, edge functions, RLS policies, and migrations.
+
+## Authentication
+
+### Setup and Configuration
+
+```typescript
+// app/providers.tsx
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { SessionContextProvider } from '@supabase/auth-helpers-react';
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const supabase = createClientComponentClient();
+  return (
+    <SessionContextProvider supabaseClient={supabase}>
+      {children}
+    </SessionContextProvider>
+  );
+}
+
+// middleware.ts
+import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+export async function middleware(request: NextRequest) {
+  const response = NextResponse.next();
+  const supabase = createMiddlewareClient({ req: request, res: response });
+  
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  
+  // Protected routes
+  if (request.nextUrl.pathname.startsWith('/dashboard')) {
+    if (!session) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+  
+  return response;
+}
+```
+
+### Authentication Flows
+
+```typescript
+// lib/auth.ts
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+
+export async function signIn(email: string, password: string) {
+  const supabase = createClientComponentClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  
+  if (error) throw error;
+  return data;
+}
+
+export async function signUp(email: string, password: string) {
+  const supabase = createClientComponentClient();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: `${window.location.origin}/auth/callback`,
+    },
+  });
+  
+  if (error) throw error;
+  return data;
+}
+
+export async function signOut() {
+  const supabase = createClientComponentClient();
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function resetPassword(email: string) {
+  const supabase = createClientComponentClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/auth/reset-password`,
+  });
+  
+  if (error) throw error;
+}
+```
+
+### Server-Side Authentication
+
+```typescript
+// app/api/protected/route.ts
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+
+export async function GET(request: Request) {
+  const supabase = createRouteHandlerClient({ cookies });
+  const { data: { session } } = await supabase.auth.getSession();
+  
+  if (!session) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+  
+  // Your protected route logic here
+}
+
+// Server Component
+import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+
+export default async function ProtectedPage() {
+  const supabase = createServerComponentClient({ cookies });
+  const { data: { session } } = await supabase.auth.getSession();
+  
+  if (!session) {
+    redirect('/login');
+  }
+  
+  return <div>Protected Content</div>;
+}
+```
+
+### Role-Based Access Control
+
+```typescript
+// types/auth.ts
+type UserRole = 'user' | 'admin' | 'moderator';
+
+interface UserMetadata {
+  roles?: UserRole[];
+}
+
+// lib/auth/rbac.ts
+export function hasRole(user: User, role: UserRole): boolean {
+  return user.app_metadata.roles?.includes(role) ?? false;
+}
+
+// Example RLS Policy
+CREATE POLICY "Users can only access their own data"
+ON profiles
+FOR ALL
+USING (
+  auth.uid() = user_id
+  OR
+  EXISTS (
+    SELECT 1
+    FROM auth.users
+    WHERE auth.users.id = auth.uid()
+    AND auth.users.raw_app_meta_data->>'roles' ? 'admin'
+  )
+);
+```
+
+## Key Principles
+
+1. Security First
+   - Always implement RLS policies
+   - Validate inputs at every layer
+   - Use proper authentication and authorization
+
+2. Performance
+   - Optimize database queries
+   - Use edge functions for low-latency operations
+   - Implement proper caching strategies
+
+3. Maintainability
+   - Follow consistent naming conventions
+   - Document all functions and policies
+   - Use typed database operations
+
+## Database Functions
+
+### Best Practices
+
+```sql
+-- ✅ DO: Write well-documented, typed functions
+CREATE OR REPLACE FUNCTION get_user_profile(user_id UUID)
+RETURNS TABLE (
+  id UUID,
+  name TEXT,
+  email TEXT,
+  created_at TIMESTAMPTZ
+) AS $$
+  -- Function documentation
+  -- Parameters:
+  --   user_id: The UUID of the user
+  -- Returns: User profile information
+  SELECT 
+    id,
+    name,
+    email,
+    created_at
+  FROM users
+  WHERE id = user_id;
+$$ LANGUAGE sql SECURITY DEFINER;
+
+-- ❌ DON'T: Write undocumented, untyped functions
+CREATE FUNCTION get_user(id TEXT) 
+RETURNS json AS $$
+  SELECT row_to_json(users.*) FROM users WHERE users.id = id;
+$$ LANGUAGE sql;
+```
+
+### Guidelines
+
+1. Use `SECURITY DEFINER` appropriately
+2. Implement proper error handling
+3. Use strong typing
+4. Document function behavior
+5. Follow naming conventions
+
+## Edge Functions
+
+### Best Practices
+
+```typescript
+// ✅ DO: Implement proper error handling and validation
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from '@supabase/supabase-js'
+import { z } from 'zod'
+
+const requestSchema = z.object({
+  userId: z.string().uuid(),
+  data: z.object({
+    name: z.string().min(1),
+    email: z.string().email()
+  })
+})
+
+serve(async (req) => {
+  try {
+    const { userId, data } = requestSchema.parse(await req.json())
+    
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    )
+    
+    const { data: result, error } = await supabase
+      .from('users')
+      .update(data)
+      .eq('id', userId)
+      .single()
+      
+    if (error) throw error
+    
+    return new Response(
+      JSON.stringify({ success: true, data: result }),
+      { headers: { 'Content-Type': 'application/json' } }
+    )
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error.message
+      }),
+      { 
+        status: error.status || 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    )
+  }
+})
+
+// ❌ DON'T: Skip validation or error handling
+serve(async (req) => {
+  const { userId, data } = await req.json()
+  const result = await updateUser(userId, data)
+  return new Response(JSON.stringify(result))
+})
+```
+
+### Guidelines
+
+1. Validate all inputs using Zod
+2. Implement proper error handling
+3. Use TypeScript for type safety
+4. Follow security best practices
+5. Optimize for edge performance
+
+## Row Level Security (RLS)
+
+### Best Practices
+
+```sql
+-- ✅ DO: Write specific, well-documented policies
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own profile"
+ON profiles
+FOR SELECT
+USING (
+  auth.uid() = user_id
+);
+
+CREATE POLICY "Users can update their own profile"
+ON profiles
+FOR UPDATE
+USING (
+  auth.uid() = user_id
+)
+WITH CHECK (
+  auth.uid() = user_id
+);
+
+-- ❌ DON'T: Write overly permissive policies
+CREATE POLICY "Allow all authenticated users"
+ON profiles
+USING (
+  auth.role() = 'authenticated'
+);
+```
+
+### Guidelines
+
+1. Enable RLS on all tables
+2. Write specific, focused policies
+3. Test policies thoroughly
+4. Document policy intentions
+5. Use proper auth checks
+
+## Migrations
+
+### Best Practices
+
+```sql
+-- ✅ DO: Write reversible migrations
+-- filename: YYYYMMDDHHMMSS_add_user_profiles.sql
+-- up migration
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users NOT NULL,
+  name TEXT,
+  bio TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX profiles_user_id_key ON profiles(user_id);
+
+-- down migration
+DROP TABLE IF EXISTS profiles;
+
+-- ❌ DON'T: Write irreversible migrations or skip down migrations
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY,
+  data JSONB
+);
+```
+
+### Guidelines
+
+1. Make migrations reversible
+2. Use explicit types and constraints
+3. Include helpful comments
+4. Test migrations thoroughly
+5. Follow naming conventions
+
+## Real-time Subscriptions
+
+### Best Practices
+
+```typescript
+// ✅ DO: Implement proper subscription handling
+const subscribeToProfile = (userId: string) => {
+  const subscription = supabase
+    .from('profiles')
+    .on('UPDATE', (payload) => {
+      if (payload.new.id === userId) {
+        updateLocalProfile(payload.new)
+      }
+    })
+    .subscribe()
+    
+  return () => {
+    supabase.removeSubscription(subscription)
+  }
+}
+
+// ❌ DON'T: Skip cleanup or error handling
+const subscription = supabase
+  .from('profiles')
+  .on('*', console.log)
+  .subscribe()
+```
+
+### Guidelines
+
+1. Clean up subscriptions
+2. Handle errors properly
+3. Filter events appropriately
+4. Optimize performance
+5. Test subscription behavior
+
+## Storage
+
+### Best Practices
+
+```typescript
+// ✅ DO: Implement proper file handling
+const uploadAvatar = async (
+  userId: string,
+  file: File
+): Promise<string> => {
+  try {
+    // Validate file
+    if (!file.type.startsWith('image/')) {
+      throw new Error('Invalid file type')
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('File too large')
+    }
+    
+    const fileName = `${userId}/avatar.${file.name.split('.').pop()}`
+    
+    const { error } = await supabase.storage
+      .from('avatars')
+      .upload(fileName, file, {
+        upsert: true,
+        cacheControl: '3600'
+      })
+      
+    if (error) throw error
+    
+    return fileName
+  } catch (error) {
+    console.error('Upload error:', error)
+    throw error
+  }
+}
+
+// ❌ DON'T: Skip validation or error handling
+const upload = async (file: File) => {
+  await supabase.storage
+    .from('files')
+    .upload(file.name, file)
+}
+```
+
+### Guidelines
+
+1. Validate files before upload
+2. Implement proper error handling
+3. Use appropriate bucket organization
+4. Set proper cache controls
+5. Clean up unused files

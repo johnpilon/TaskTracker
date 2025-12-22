@@ -1,0 +1,213 @@
+---
+description: Best practices for using tRPC in Next.js applications
+globs: **/*.{ts,tsx}
+alwaysApply: false
+---
+---
+description: "Comprehensive guide to tRPC best practices in a Next.js application, focusing on type-safe API development, router organization, input validation with Zod, middleware, and performance optimization."
+glob: ["src/server/api/routers/**/*.ts", "src/server/trpc/routers/**/*.ts", "src/trpc/routers/**/*.ts", "src/server/api/trpc.ts", "src/server/trpc/trpc.ts", "src/app/api/trpc/[trpc]/route.ts", "src/lib/trpc/client.ts", "src/utils/trpc.ts"]
+---
+
+# tRPC Best Practices
+
+## Overview
+This document outlines best practices for using tRPC in our Next.js application. It focuses on type-safe API development, router organization, and performance optimization.
+
+### Related Guides
+- For Next.js-specific patterns, see [Next.js Best Practices](mdc:nextjs-best-practices.mdc)
+- For API development, see [API Best Practices](mdc:api-best-practices.mdc)
+- For error handling, see [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+- For type safety, see [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+- For database access, see [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+- For security considerations, see [Security Best Practices](mdc:security-best-practices.mdc)
+
+## Key Principles
+
+1. Type Safety
+   - Leverage TypeScript for end-to-end type safety
+   - Use Zod for input validation
+   - Maintain strict type checking
+
+2. Performance
+   - Implement proper caching strategies
+   - Use batching for multiple queries
+   - Optimize query invalidation
+
+3. Security
+   - Implement proper authentication
+   - Use input validation
+   - Follow security best practices
+
+4. Code Organization
+   - Structure routers by domain
+   - Implement reusable procedures
+   - Maintain clean architecture
+
+## Implementation Guidelines
+
+### Router Organization
+When building tRPC routers, refer to these guides for specific aspects:
+
+1. **Type Safety**
+   - Use TypeScript following [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+   - Implement Zod validation following [Zod Best Practices](mdc:zod-best-practices.mdc)
+   - Maintain proper type inference
+
+2. **Error Handling**
+   - Follow patterns from [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+   - Implement proper error codes
+   - Maintain consistent error formats
+
+3. **Database Integration**
+   - Use Supabase features following [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+   - Implement proper error handling
+   - Optimize database queries
+
+4. **Security**
+   - Follow guidelines from [Security Best Practices](mdc:security-best-practices.mdc)
+   - Implement proper authentication
+   - Use input validation
+
+### Middleware Implementation
+
+```typescript
+// server/api/trpc.ts
+import { initTRPC, TRPCError } from '@trpc/server';
+import { Context } from './context';
+
+const t = initTRPC.context<Context>().create();
+
+// Base middleware
+const middleware = t.middleware;
+const isAuthed = middleware(({ ctx, next }) => {
+  if (!ctx.session?.user?.id) {
+    throw new TRPCError({ code: 'UNAUTHORIZED' });
+  }
+  return next({
+    ctx: {
+      session: ctx.session,
+      user: ctx.session.user,
+    },
+  });
+});
+
+// Procedures
+export const router = t.router;
+export const publicProcedure = t.procedure;
+export const protectedProcedure = t.procedure.use(isAuthed);
+```
+
+### Input Validation
+
+```typescript
+// lib/validations/user.ts
+import { z } from 'zod';
+
+export const updateProfileSchema = z.object({
+  name: z.string()
+    .min(2, 'Name must be at least 2 characters')
+    .max(50, 'Name must be less than 50 characters'),
+  bio: z.string()
+    .max(500, 'Bio must be less than 500 characters')
+    .optional(),
+  email: z.string()
+    .email('Invalid email address')
+    .optional(),
+  website: z.string()
+    .url('Invalid URL')
+    .optional(),
+});
+
+// Usage in router
+export const userRouter = router({
+  updateProfile: protectedProcedure
+    .input(updateProfileSchema)
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: input,
+      });
+    }),
+});
+```
+
+### Query Optimization
+
+```typescript
+// hooks/api/useProfile.ts
+import { api } from '@/lib/api';
+
+export function useProfile(userId: string) {
+  return api.user.getProfile.useQuery(
+    { userId },
+    {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      cacheTime: 1000 * 60 * 30, // 30 minutes
+    }
+  );
+}
+
+// hooks/api/useUpdateProfile.ts
+export function useUpdateProfile() {
+  const utils = api.useContext();
+  
+  return api.user.updateProfile.useMutation({
+    onSuccess: () => {
+      // Invalidate relevant queries
+      utils.user.getProfile.invalidate();
+    },
+  });
+}
+```
+
+### Batching Queries
+
+```typescript
+// components/UserProfile.tsx
+'use client';
+
+export function UserProfile({ userId }: { userId: string }) {
+  // These queries will be batched into a single request
+  const profile = api.user.getProfile.useQuery({ userId });
+  const posts = api.post.getUserPosts.useQuery({ userId });
+  const stats = api.user.getStats.useQuery({ userId });
+  
+  return (
+    <div>
+      {/* Render profile data */}
+    </div>
+  );
+}
+```
+
+## Best Practices Summary
+
+1. **Router Organization**
+   - Group related procedures
+   - Use descriptive names
+   - Implement proper access control
+   - Maintain clean separation of concerns
+
+2. **Type Safety**
+   - Use Zod for validation
+   - Maintain strict TypeScript
+   - Define proper interfaces
+   - Use proper types for context
+
+3. **Performance**
+   - Implement proper caching
+   - Use query batching
+   - Optimize invalidation
+   - Monitor query performance
+
+4. **Security**
+   - Validate all inputs
+   - Implement proper auth
+   - Follow security practices
+   - Use middleware for checks
+
+5. **Code Organization**
+   - Group by domain
+   - Use proper naming
+   - Maintain consistency
+   - Document complex logic

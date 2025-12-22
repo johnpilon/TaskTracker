@@ -1,0 +1,193 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Database Safety Protection Rule
+
+## 🚨 ABSOLUTE MANDATORY COMPLIANCE 🚨
+
+**This rule is BINDING and NON-NEGOTIABLE. Violations result in immediate safety protocol breach.**
+
+## Overview
+This rule prevents accidental database destruction and ensures all destructive database operations require explicit user approval before execution.
+
+## Rule Definition
+
+```yaml
+name: database_safety_protection
+priority: critical
+scope: ["database", "supabase", "postgresql", "migrations"]
+```
+
+## 🚨 CRITICAL DATABASE SAFETY REQUIREMENTS
+
+### Prohibited Actions Without Explicit Approval
+
+The AI assistant MUST NOT execute any of the following commands or operations without first obtaining explicit user approval:
+
+#### 1. Database Reset & Destruction Commands
+- `supabase db reset`
+- `supabase db push`
+- `supabase db push --local`
+- `supabase stop && supabase start` (when suggested as a "fix")
+- `docker system prune`
+- `docker-compose down -v`
+- `rm -rf supabase/` or similar directory deletions
+- Any command that would result in complete database recreation
+
+#### 2. Destructive SQL Operations
+- `DROP TABLE`
+- `DROP DATABASE`
+- `TRUNCATE TABLE`
+- `DELETE FROM table_name` (without specific WHERE clauses)
+- `DROP SCHEMA`
+- `DROP POLICY` (on critical tables like profiles, auth, etc.)
+- `ALTER TABLE ... DROP COLUMN`
+- Mass data deletion operations
+
+#### 3. Migration & Schema Destructive Operations
+- `supabase migration new` with destructive content
+- `npm run migrate:reset`
+- `npm run db:reset`
+- `drizzle-kit drop`
+- Any migration that drops tables or significant data
+
+#### 4. Environment Reset Commands
+- `rm -rf .next`
+- `rm -rf node_modules`
+- `npm run seed:reset`
+- `npm run db:seed:reset`
+
+### Required Approval Process
+
+Before executing ANY destructive database operation, the AI MUST:
+
+1. **STOP** and clearly state: "🚨 **DATABASE SAFETY CHECK**: This operation could be destructive to your database/environment."
+
+2. **LIST** the specific commands that would be executed
+
+3. **EXPLAIN** the potential consequences and what data/configuration might be lost
+
+4. **REQUEST** explicit approval with this exact format:
+   ```
+   ⚠️  DESTRUCTIVE OPERATION APPROVAL REQUIRED ⚠️
+   
+   Operation: [specific command/action]
+   Risk Level: [Low/Medium/High/Critical]
+   Potential Data Loss: [description]
+   Recovery Time: [estimated time to restore]
+   
+   Do you explicitly approve this destructive operation? 
+   Please respond with "YES, I APPROVE THE DESTRUCTIVE OPERATION" to proceed.
+   ```
+
+5. **WAIT** for explicit approval before proceeding
+
+### Safe Alternative Approaches
+
+Instead of destructive operations, the AI should prioritize:
+
+#### For Authentication Issues:
+- Clear browser storage/cookies
+- Restart development server only (`npm run dev`)
+- Check RLS policies without dropping them
+- Verify user IDs and sessions
+- Use targeted fixes rather than full resets
+
+#### For Database Issues:
+- Targeted SQL fixes for specific problems
+- Create backups before any changes
+- Use `INSERT`, `UPDATE` with specific conditions
+- Fix constraints without dropping tables
+- Repair data rather than recreate
+
+#### For Environment Issues:
+- Restart specific services rather than full resets
+- Clear caches selectively
+- Fix configuration issues specifically
+- Use environment verification scripts
+
+### Emergency Recovery Only
+
+The following destructive operations are ONLY permitted as absolute last resort with explicit approval:
+
+```bash
+# ⚠️ EMERGENCY RECOVERY SEQUENCE - REQUIRES APPROVAL
+# Last resort when environment is completely broken
+supabase stop
+docker system prune -f
+supabase start
+# Followed by restoration procedures
+```
+
+### Backup Requirements
+
+Before ANY approved destructive operation:
+1. Create database backup: `pg_dump "postgresql://postgres:postgres@127.0.0.1:54322/postgres" > emergency-backup-$(date +%Y%m%d-%H%M%S).sql`
+2. Verify backup was created successfully
+3. Document the backup location
+4. Only then proceed with approved operation
+
+### Monitoring & Logging
+
+All database operations should be logged with:
+- Timestamp
+- Operation performed
+- User approval status
+- Backup status
+- Recovery procedures if needed
+
+## Examples of Proper Safety Checks
+
+### ❌ WRONG - Immediate Destructive Action
+```bash
+# User reports auth issues
+supabase db reset  # ❌ DANGEROUS - No approval requested
+```
+
+### ✅ CORRECT - Safety-First Approach
+```
+🚨 **DATABASE SAFETY CHECK**: You're experiencing auth issues. 
+
+Before considering destructive operations like `supabase db reset`, let me try safer approaches:
+
+1. Check RLS policies
+2. Verify session synchronization  
+3. Clear browser storage
+4. Restart dev server
+
+These steps preserve your data and recent work. Shall I proceed with these safer methods first?
+```
+
+## Critical Tables Requiring Extra Protection
+
+Special protection for these essential tables:
+- `auth.users`
+- `profiles` 
+- `relationships`
+- `relationship_members`
+- `partner_invitations`
+- `conversations`
+- `messages`
+- `matches`
+
+Any operations affecting these tables require elevated approval process.
+
+## Rule Enforcement
+
+This rule takes precedence over:
+- Performance optimization suggestions
+- Quick fix recommendations  
+- "Nuclear option" solutions
+- Time-saving shortcuts that risk data loss
+
+## Success Metrics
+
+- Zero accidental database destructions
+- Maintained environment stability
+- Preserved user data and test accounts
+- Reduced restoration time/effort
+- Increased development confidence
+
+Remember: **Time spent on safety checks is always less than time spent on full environment restoration.**

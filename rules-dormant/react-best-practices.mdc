@@ -1,0 +1,526 @@
+---
+description: Best practices for React development
+globs: **/*.{ts,tsx,js,jsx}
+alwaysApply: false
+---
+---
+description: "Guidelines and best practices for developing React components and applications within a Next.js environment, covering hooks, state management (React Query), component design, form handling (React Hook Form & Zod), performance, and accessibility."
+glob: ["src/**/*.{ts,tsx,js,jsx}", "app/**/*.{ts,tsx,js,jsx}", "!**/{layout,page,loading,error,template,default,route}.{js,jsx,ts,tsx}", "!**/middleware.{js,ts}", "!next.config.{js,mjs}", "!**/*.test.{ts,tsx,js,jsx}", "!**/*.spec.{ts,tsx,js,jsx}", "!**/__tests__/**", "!**/node_modules/**"]
+---
+
+# React Best Practices
+
+## Overview
+This document outlines best practices for React development in our Next.js application. It focuses on component architecture, state management, and performance optimization.
+
+### Related Guides
+- For Next.js-specific patterns, see [Next.js Best Practices](mdc:nextjs-best-practices.mdc)
+- For form handling, see [Zod Best Practices](mdc:zod-best-practices.mdc)
+- For styling, see [Tailwind CSS Best Practices](mdc:tailwindcss-best-practices.mdc)
+- For accessibility, see [Accessibility Best Practices](mdc:accessibility-best-practices.mdc)
+- For error boundaries and monitoring, see [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+- For type safety in components, see [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+
+## Component Architecture
+When building React components, follow these guidelines while referring to the appropriate specialized guides:
+
+1. **Type Safety**
+   - Use TypeScript for all components
+   - Follow patterns from [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+   - Implement proper prop validation
+
+2. **State Management**
+   - Use appropriate hooks based on complexity
+   - Follow patterns from [Next.js Best Practices](mdc:nextjs-best-practices.mdc) for Server Components
+   - Implement proper error boundaries as described in [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+
+3. **Form Handling**
+   - Use Zod for validation following [Zod Best Practices](mdc:zod-best-practices.mdc)
+   - Implement proper error handling
+   - Follow accessibility guidelines from [Accessibility Best Practices](mdc:accessibility-best-practices.mdc)
+
+4. **Styling**
+   - Use Tailwind CSS following [Tailwind CSS Best Practices](mdc:tailwindcss-best-practices.mdc)
+   - Implement responsive design
+   - Follow accessibility guidelines
+
+## Key Principles
+
+1. Component Architecture
+   - Use functional components with hooks
+   - Keep components focused and reusable
+   - Implement proper component composition
+   - Follow single responsibility principle
+
+2. State Management
+   - Use appropriate state management solutions
+   - Implement proper data flow
+   - Handle side effects correctly
+   - Optimize re-renders
+
+3. Form Handling
+   - Use React Hook Form for forms
+   - Implement proper validation
+   - Handle form submission correctly
+   - Optimize form performance
+
+4. Data Fetching
+   - Use React Query for data management
+   - Implement proper caching strategies
+   - Handle loading and error states
+   - Optimize data updates
+
+## Implementation Guidelines
+
+### Component Architecture
+
+```typescript
+// ✅ DO: Create focused, reusable components
+// components/UserProfile/UserAvatar.tsx
+'use client';
+
+interface UserAvatarProps {
+  user: User;
+  size?: 'sm' | 'md' | 'lg';
+  onImageLoad?: () => void;
+}
+
+export function UserAvatar({
+  user,
+  size = 'md',
+  onImageLoad,
+}: UserAvatarProps) {
+  return (
+    <div className={`avatar-${size}`}>
+      <Image
+        src={user.avatarUrl}
+        alt={`${user.name}'s avatar`}
+        width={size === 'lg' ? 128 : size === 'md' ? 64 : 32}
+        height={size === 'lg' ? 128 : size === 'md' ? 64 : 32}
+        onLoad={onImageLoad}
+        className="rounded-full"
+      />
+    </div>
+  );
+}
+
+// ❌ DON'T: Create large, unfocused components
+function BadUserProfile() {
+  // Bad: Too many responsibilities in one component
+  const [user, setUser] = useState(null);
+  const [posts, setPosts] = useState([]);
+  const [comments, setComments] = useState([]);
+  
+  // Fetch user data
+  // Fetch posts
+  // Fetch comments
+  // Handle form submission
+  // Handle image upload
+  // etc...
+}
+```
+
+### State Management with React Query
+
+```typescript
+// ✅ DO: Implement proper data fetching with React Query
+// hooks/useUser.ts
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+}
+
+// Query key constants
+export const userKeys = {
+  all: ['users'] as const,
+  lists: () => [...userKeys.all, 'list'] as const,
+  list: (filters: string) => [...userKeys.lists(), { filters }] as const,
+  details: () => [...userKeys.all, 'detail'] as const,
+  detail: (id: string) => [...userKeys.details(), id] as const,
+};
+
+// Custom hook for user data
+export function useUser(userId: string) {
+  const queryClient = useQueryClient();
+  
+  // Query for user data
+  const userQuery = useQuery({
+    queryKey: userKeys.detail(userId),
+    queryFn: () => fetchUser(userId),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+  
+  // Mutation for updating user
+  const updateUser = useMutation({
+    mutationFn: (newUser: Partial<User>) =>
+      updateUserData(userId, newUser),
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        userKeys.detail(userId),
+        data
+      );
+      queryClient.invalidateQueries({
+        queryKey: userKeys.lists(),
+      });
+    },
+  });
+  
+  return {
+    user: userQuery.data,
+    isLoading: userQuery.isLoading,
+    isError: userQuery.isError,
+    error: userQuery.error,
+    updateUser: updateUser.mutate,
+  };
+}
+
+// ❌ DON'T: Use local state for remote data
+function BadUserComponent({ userId }: { userId: string }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  useEffect(() => {
+    fetchUser(userId)
+      .then(setUser)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [userId]);
+  
+  // Bad: Manual loading/error states
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+  
+  return <div>{user.name}</div>;
+}
+```
+
+### Form Handling with React Hook Form
+
+```typescript
+// ✅ DO: Implement forms with React Hook Form
+// components/UserForm/UserForm.tsx
+'use client';
+
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+
+// Form validation schema
+const userSchema = z.object({
+  name: z.string()
+    .min(2, 'Name must be at least 2 characters')
+    .max(50, 'Name must be at most 50 characters'),
+  email: z.string()
+    .email('Invalid email address'),
+  age: z.number()
+    .min(18, 'Must be at least 18 years old')
+    .max(120, 'Invalid age'),
+  bio: z.string()
+    .max(500, 'Bio must be at most 500 characters')
+    .optional(),
+});
+
+type UserFormData = z.infer<typeof userSchema>;
+
+interface UserFormProps {
+  defaultValues?: Partial<UserFormData>;
+  onSubmit: (data: UserFormData) => Promise<void>;
+}
+
+export function UserForm({
+  defaultValues,
+  onSubmit,
+}: UserFormProps) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    reset,
+  } = useForm<UserFormData>({
+    resolver: zodResolver(userSchema),
+    defaultValues,
+  });
+  
+  const onSubmitHandler = async (data: UserFormData) => {
+    try {
+      await onSubmit(data);
+      reset(data);
+    } catch (error) {
+      console.error('Form submission error:', error);
+    }
+  };
+  
+  return (
+    <form
+      onSubmit={handleSubmit(onSubmitHandler)}
+      className="space-y-4"
+    >
+      <div>
+        <label htmlFor="name">Name</label>
+        <input
+          id="name"
+          type="text"
+          {...register('name')}
+          className={`form-input ${
+            errors.name ? 'border-red-500' : ''
+          }`}
+        />
+        {errors.name && (
+          <p className="text-red-500 text-sm">
+            {errors.name.message}
+          </p>
+        )}
+      </div>
+      
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          {...register('email')}
+          className={`form-input ${
+            errors.email ? 'border-red-500' : ''
+          }`}
+        />
+        {errors.email && (
+          <p className="text-red-500 text-sm">
+            {errors.email.message}
+          </p>
+        )}
+      </div>
+      
+      <div>
+        <label htmlFor="age">Age</label>
+        <input
+          id="age"
+          type="number"
+          {...register('age', { valueAsNumber: true })}
+          className={`form-input ${
+            errors.age ? 'border-red-500' : ''
+          }`}
+        />
+        {errors.age && (
+          <p className="text-red-500 text-sm">
+            {errors.age.message}
+          </p>
+        )}
+      </div>
+      
+      <div>
+        <label htmlFor="bio">Bio</label>
+        <textarea
+          id="bio"
+          {...register('bio')}
+          className={`form-textarea ${
+            errors.bio ? 'border-red-500' : ''
+          }`}
+        />
+        {errors.bio && (
+          <p className="text-red-500 text-sm">
+            {errors.bio.message}
+          </p>
+        )}
+      </div>
+      
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        className="btn btn-primary"
+      >
+        {isSubmitting ? 'Submitting...' : 'Submit'}
+      </button>
+    </form>
+  );
+}
+
+// ❌ DON'T: Use uncontrolled forms without validation
+function BadUserForm() {
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const formData = new FormData(e.target as HTMLFormElement);
+    // Bad: No validation, type safety, or error handling
+    const data = Object.fromEntries(formData);
+    submitData(data);
+  };
+  
+  return (
+    <form onSubmit={handleSubmit}>
+      <input name="name" type="text" />
+      <input name="email" type="email" />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+### Performance Optimization
+
+```typescript
+// ✅ DO: Implement proper performance optimizations
+// components/UserList/UserListItem.tsx
+'use client';
+
+import { memo } from 'react';
+import { UserAvatar } from './UserAvatar';
+
+interface UserListItemProps {
+  user: User;
+  onSelect: (userId: string) => void;
+}
+
+export const UserListItem = memo(
+  function UserListItem({ user, onSelect }: UserListItemProps) {
+    return (
+      <div
+        className="flex items-center p-4 hover:bg-gray-50"
+        onClick={() => onSelect(user.id)}
+      >
+        <UserAvatar user={user} size="sm" />
+        <div className="ml-4">
+          <h3 className="font-medium">{user.name}</h3>
+          <p className="text-gray-500">{user.email}</p>
+        </div>
+      </div>
+    );
+  },
+  (prev, next) => prev.user.id === next.user.id
+);
+
+// ❌ DON'T: Ignore performance optimizations
+function BadUserList({ users }: { users: User[] }) {
+  // Bad: Recreating functions on every render
+  const handleSelect = (userId: string) => {
+    console.log(userId);
+  };
+  
+  return (
+    <div>
+      {users.map(user => (
+        // Bad: No memoization
+        <div key={user.id} onClick={() => handleSelect(user.id)}>
+          {user.name}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+## Best Practices
+
+1. **Component Architecture**
+   - Use functional components
+   - Keep components focused
+   - Implement proper composition
+   - Use TypeScript for type safety
+   - Follow naming conventions
+
+2. **State Management**
+   - Choose appropriate solutions
+   - Implement proper data flow
+   - Handle side effects correctly
+   - Optimize re-renders
+   - Use proper caching
+
+3. **Form Handling**
+   - Use React Hook Form
+   - Implement proper validation
+   - Handle errors gracefully
+   - Optimize form performance
+   - Use controlled inputs
+
+4. **Data Fetching**
+   - Use React Query
+   - Implement proper caching
+   - Handle loading states
+   - Handle error states
+   - Optimize updates
+
+5. **Performance**
+   - Use proper memoization
+   - Implement code splitting
+   - Optimize bundle size
+   - Use proper loading
+   - Monitor performance
+
+## Example Implementation
+
+Here's a complete example of a user profile component that implements these best practices:
+
+```typescript
+// components/UserProfile/UserProfile.tsx
+'use client';
+
+import { useUser } from '@/hooks/useUser';
+import { UserForm } from './UserForm';
+import { UserAvatar } from './UserAvatar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Suspense } from 'react';
+
+interface UserProfileProps {
+  userId: string;
+}
+
+export function UserProfile({ userId }: UserProfileProps) {
+  const {
+    user,
+    isLoading,
+    isError,
+    error,
+    updateUser,
+  } = useUser(userId);
+  
+  if (isLoading) {
+    return <UserProfileSkeleton />;
+  }
+  
+  if (isError) {
+    return (
+      <div className="text-red-500">
+        Error: {error.message}
+      </div>
+    );
+  }
+  
+  return (
+    <ErrorBoundary fallback={<div>Something went wrong</div>}>
+      <div className="space-y-8">
+        <div className="flex items-center space-x-4">
+          <UserAvatar user={user} size="lg" />
+          <div>
+            <h1 className="text-2xl font-bold">{user.name}</h1>
+            <p className="text-gray-500">{user.email}</p>
+          </div>
+        </div>
+        
+        <Suspense fallback={<div>Loading form...</div>}>
+          <UserForm
+            defaultValues={user}
+            onSubmit={async (data) => {
+              await updateUser(data);
+            }}
+          />
+        </Suspense>
+      </div>
+    </ErrorBoundary>
+  );
+}
+```
+
+## Testing
+
+For comprehensive testing guidelines and best practices, including:
+- Unit Testing React Components
+- Integration Testing
+- End-to-End Testing
+- Test Organization
+- Testing Tools and Libraries
+
+Please refer to our dedicated testing best practices guide: `@testing-best-practices.mdc`
+
+This ensures consistent testing practices across our entire application, not just React components.

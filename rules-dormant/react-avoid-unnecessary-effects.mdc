@@ -1,0 +1,142 @@
+---
+description: React 19 best practices for avoiding unnecessary useEffect patterns and preventing infinite re-renders
+globs: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+alwaysApply: true
+---
+
+You are an expert in React 19, TypeScript, and modern React patterns. You are focusing on producing clear, readable code that follows React's official guidance on avoiding unnecessary Effects.
+
+You always use the latest stable versions of React 19 and you are familiar with the latest features and best practices for preventing infinite re-renders and performance issues.
+
+# React Effect Anti-Patterns to Avoid
+
+Never use useEffect to update state based on other state or props. This creates cascading updates and infinite re-render loops.
+
+Bad pattern:
+```typescript
+const [count, setCount] = useState(0);
+const [doubled, setDoubled] = useState(0);
+
+useEffect(() => {
+  setDoubled(count * 2); // Anti-pattern: updating state based on other state
+}, [count]);
+```
+
+Good pattern:
+```typescript
+const [count, setCount] = useState(0);
+const doubled = count * 2; // Calculate during render
+```
+
+# State Calculation Rules
+
+Calculate derived state during render instead of storing it in separate state variables.
+
+Use useMemo for expensive calculations that depend on props or state:
+```typescript
+const expensiveValue = useMemo(() => {
+  return heavyCalculation(data);
+}, [data]);
+```
+
+Never create separate state for values that can be computed from existing state or props.
+
+# Effect Usage Guidelines
+
+Only use useEffect for synchronizing with external systems like APIs, DOM manipulation, or subscriptions.
+
+Valid useEffect use cases:
+- Data fetching from APIs
+- Setting up subscriptions
+- Manually changing the DOM
+- Cleanup of resources
+
+Invalid useEffect use cases:
+- Updating component state based on other state
+- Transforming data for rendering
+- Handling user events (use event handlers instead)
+
+# Event Handler vs Effect
+
+Handle user interactions in event handlers, not Effects:
+
+Bad pattern:
+```typescript
+useEffect(() => {
+  if (shouldSubmit) {
+    submitForm();
+    setShouldSubmit(false);
+  }
+}, [shouldSubmit]);
+```
+
+Good pattern:
+```typescript
+const handleSubmit = () => {
+  submitForm();
+};
+```
+
+# Data Fetching Best Practices
+
+When fetching data in useEffect, always implement cleanup to prevent race conditions:
+
+```typescript
+useEffect(() => {
+  let ignore = false;
+  
+  fetchData(query).then(result => {
+    if (!ignore) {
+      setResult(result);
+    }
+  });
+  
+  return () => {
+    ignore = true;
+  };
+}, [query]);
+```
+
+# Component Key Strategy
+
+Use component keys to reset state instead of useEffect:
+
+Bad pattern:
+```typescript
+useEffect(() => {
+  setLocalState(initialValue);
+}, [resetTrigger]);
+```
+
+Good pattern:
+```typescript
+<Component key={resetTrigger} />
+```
+
+# Dependency Array Rules
+
+Keep dependency arrays minimal and stable. Avoid objects and functions in dependencies unless they are memoized with useCallback or useMemo.
+
+Prefer functional state updates to reduce dependencies:
+```typescript
+setCount(prev => prev + 1); // No dependency on count needed
+```
+
+# Performance Optimization
+
+Use React.memo for components that render frequently with the same props.
+Use useCallback only when passing functions to memoized child components.
+Use useMemo only for expensive calculations, not for every derived value.
+
+# Modern React Patterns
+
+Prefer built-in React features over custom implementations:
+- Use Suspense for loading states instead of manual loading flags
+- Use Error Boundaries for error handling instead of try-catch in Effects
+- Use React 19's new features like useOptimistic and useFormStatus when appropriate
+
+# Component Lifecycle
+
+Components should be predictable and not cause side effects during render.
+All side effects should be contained within useEffect, event handlers, or other appropriate React APIs.
+Never call setState directly during render - this causes infinite loops.

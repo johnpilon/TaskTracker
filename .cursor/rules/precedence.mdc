@@ -1,0 +1,110 @@
+---
+alwaysApply: true
+---
+# Rule Precedence and Enforcement Policy
+
+This file defines the mandatory precedence order for all Cursor rules
+applied to this repository.
+
+When multiple rules apply or appear to conflict, Cursor MUST enforce
+the highest-priority rule and MUST NOT allow lower-priority rules
+to override or contradict it.
+
+---
+
+## Precedence Order (Highest to Lowest)
+
+### 1. Safety / Hard Stop (Non-negotiable)
+These rules ALWAYS apply and cannot be bypassed.
+
+- database-safety-protection.mdc
+- cursor-rules-location.mdc
+
+Any instruction or suggestion that violates these rules MUST be rejected.
+
+---
+
+### 2. Security / Correctness
+These rules apply to all code paths and data boundaries.
+
+- security-best-practices.mdc
+- Boundary validation rules (Zod schemas and API boundary validation)
+
+Security and correctness MUST take priority over performance, style,
+or architectural convenience.
+
+---
+
+### 3. Framework Constraints
+These rules apply only within the current framework choices.
+
+- nextjs-best-practices.mdc
+  - App Router sections ONLY
+- typescript-best-practices.mdc
+
+Rules or examples that assume different frameworks or versions
+MUST NOT be applied.
+
+---
+
+### 4. Quality Attributes
+These rules improve reliability and usability but do not override
+safety, security, or framework constraints.
+
+- Error handling rules
+- Accessibility rules
+- Testing rules
+
+---
+
+### 5. Optional Architecture (Opt-in ONLY)
+These rules apply ONLY if the corresponding technology is already
+present in the project or explicitly approved by the user.
+
+- tRPC
+- Supabase
+- Drizzle ORM
+- React Query
+
+Cursor MUST NOT introduce these tools or patterns unless explicitly requested.
+
+---
+
+### 6. Style / Voice (Lowest Priority)
+These rules apply only to presentation and documentation.
+
+- Tailwind CSS conventions
+- MocStudios voice/style guide
+  - Applies to marketing or content only
+  - MUST NOT influence code structure, logic, or architecture
+
+---
+
+## Conflict Resolution Rules
+
+- Higher-tier rules ALWAYS override lower-tier rules
+- Lower-tier rules MUST be ignored if they conflict
+- If a rule’s applicability is unclear, Cursor MUST ask before acting
+
+---
+
+## Architectural Scope Guard
+
+The current project is assumed to be:
+- Local-first
+- Minimal-architecture
+- Incrementally extensible
+
+Cursor MUST NOT:
+- Add new frameworks or architectural layers
+- Introduce backend services, databases, or auth systems
+- Restructure the project to match external templates
+
+…unless the user explicitly requests such changes.
+
+---
+
+## Enforcement Requirement
+
+Cursor must treat this file as authoritative.
+Any deviation from this policy requires explicit user approval.

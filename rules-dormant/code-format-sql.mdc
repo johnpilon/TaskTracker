@@ -1,0 +1,277 @@
+---
+description: Guidelines for writing Postgres SQL
+globs: **/*.sql
+alwaysApply: false
+---
+---
+description: "Standardized guidelines for writing clean, readable, and maintainable PostgreSQL SQL code. Covers naming conventions (tables, columns), formatting (whitespace, indentation), comments, query structure (joins, subqueries, CTEs), table and column definitions, and security considerations for RLS policies."
+glob: ["**/*.sql"]
+---
+
+# Postgres SQL Style Guide
+
+## General
+
+- Use lowercase for SQL reserved words to maintain consistency and readability.
+- Employ consistent, descriptive identifiers for tables, columns, and other database objects.
+- Use white space and indentation to enhance the readability of your code.
+- Store dates in ISO 8601 format (`yyyy-mm-ddThh:mm:ss.sssss`).
+- Include comments for complex logic, using '/* ... */' for block comments and '--' for line comments.
+
+## Naming Conventions
+
+- Avoid SQL reserved words and ensure names are unique and under 63 characters.
+- Use snake_case for tables and columns.
+- Prefer plurals for table names
+- Prefer singular names for columns.
+
+## Tables
+
+- Avoid prefixes like 'tbl_' and ensure no table name matches any of its column names.
+- Always add an `id` column of type `identity generated always` unless otherwise specified.
+- Create all tables in the `public` schema unless otherwise specified.
+- Always add the schema to SQL queries for clarity.
+- Always add a comment to describe what the table does. The comment can be up to 1024 characters.
+
+## Columns
+
+- Use singular names and avoid generic names like 'id'.
+- For references to foreign tables, use the singular of the table name with the `_id` suffix. For example `user_id` to reference the `users` table
+- Always use lowercase except in cases involving acronyms or when readability would be enhanced by an exception.
+
+#### Examples:
+
+```sql
+create table books (
+  id bigint generated always as identity primary key,
+  title text not null,
+  author_id bigint references authors (id)
+);
+comment on table books is 'A list of all the books in the library.';
+```
+
+
+## Queries
+
+- When the query is shorter keep it on just a few lines. As it gets larger start adding newlines for readability
+- Add spaces for readability.
+
+Smaller queries:
+
+
+```sql
+select *
+from employees
+where end_date is null;
+
+update employees
+set end_date = '2023-12-31'
+where employee_id = 1001;
+```
+
+Larger queries:
+
+```sql
+select
+  first_name,
+  last_name
+from
+  employees
+where
+  start_date between '2021-01-01' and '2021-12-31'
+and
+  status = 'employed';
+```
+
+
+### Joins and Subqueries
+
+#### Join Format Rules
+- Format joins and subqueries for clarity by aligning them vertically
+- Always use explicit `join` keywords (never use implicit joins with commas)
+- Always include the schema prefix (`public.`) for clarity
+- Always specify join type (`inner`, `left`, `right`, `full`)
+- For couples-related queries, consider both partner positions (partner1_id and partner2_id)
+
+#### Table References
+- Always use full table names instead of aliases unless query becomes overly complex
+- When aliases are necessary, use meaningful names that reflect the role:
+  ```sql
+  -- Good
+  select
+    sender_profile.full_name as sender_name,
+    recipient_profile.full_name as recipient_name
+  from
+    public.messages
+  join
+    public.profiles sender_profile on messages.sender_id = sender_profile.id
+  join
+    public.profiles recipient_profile on messages.recipient_id = recipient_profile.id
+  ```
+
+#### Common Join Patterns
+
+1. Profile to Couple Join:
+```sql
+-- For finding a user's couple relationship
+select
+  public.profiles.*,
+  public.couples.id as couple_id
+from
+  public.profiles
+left join
+  public.couples on (
+    profiles.id = couples.partner1_id or
+    profiles.id = couples.partner2_id
+  )
+where
+  profiles.id = auth.uid()
+```
+
+2. Experience with Creator Info:
+```sql
+-- For getting experiences with creator details
+select
+  public.experiences.*,
+  public.profiles.full_name as creator_name,
+  public.profiles.avatar_url as creator_avatar
+from
+  public.experiences
+inner join
+  public.profiles on experiences.created_by = profiles.id
+where
+  public.experiences.couple_id = :couple_id
+```
+
+3. Conversation Participants:
+```sql
+-- For getting conversation details with participant info
+select
+  public.conversations.*,
+  couple1.id as couple1_id,
+  couple2.id as couple2_id,
+  p1.full_name as partner1_name,
+  p2.full_name as partner2_name
+from
+  public.conversations
+inner join
+  public.couples couple1 on conversations.couple1_id = couple1.id
+inner join
+  public.couples couple2 on conversations.couple2_id = couple2.id
+inner join
+  public.profiles p1 on couple1.partner1_id = p1.id
+inner join
+  public.profiles p2 on couple1.partner2_id = p2.id
+```
+
+#### Subquery Guidelines
+- Use CTEs instead of subqueries for complex operations
+- If subquery is necessary, indent and align properly:
+```sql
+select
+  public.profiles.*,
+  (
+    select count(*)
+    from public.experiences
+    where experiences.couple_id = (
+      select id
+      from public.couples
+      where
+        partner1_id = profiles.id or
+        partner2_id = profiles.id
+    )
+  ) as experience_count
+from
+  public.profiles
+where
+  profiles.id = auth.uid()
+```
+
+#### Performance Considerations
+- Add indexes for frequently joined columns:
+```sql
+create index idx_couples_partners on public.couples(partner1_id, partner2_id);
+create index idx_experiences_couple on public.experiences(couple_id);
+create index idx_messages_conversation on public.messages(conversation_id);
+```
+
+#### Error Prevention
+- Always include join conditions that handle null values appropriately
+- For couple relationships, always check both partner positions:
+```sql
+-- Good: Handles both partner positions
+where
+  couples.partner1_id = :user_id or
+  couples.partner2_id = :user_id
+
+-- Bad: Only checks one position
+where
+  couples.partner1_id = :user_id
+```
+
+#### Security Considerations
+- Ensure RLS policies account for join conditions
+- When joining to profiles table, verify user has permission to view joined data:
+```sql
+create policy "Users can view profiles in their couple"
+on public.profiles
+for select
+using (
+  exists (
+    select 1
+    from public.couples
+    where
+      (partner1_id = auth.uid() and partner2_id = profiles.id) or
+      (partner2_id = auth.uid() and partner1_id = profiles.id)
+  )
+);
+```
+
+## Aliases
+
+- Use meaningful aliases that reflect the data or transformation applied, and always include the 'as' keyword for clarity.
+
+```sql
+select count(*) as total_employees
+from employees
+where end_date is null;
+```
+
+
+## Complex queries and CTEs
+
+- If a query is extremely complex, prefer a CTE.
+- Make sure the CTE is clear and linear. Prefer readability over performance.
+- Add comments to each block.
+
+```sql
+with department_employees as (
+  -- Get all employees and their departments
+  select
+    employees.department_id,
+    employees.first_name,
+    employees.last_name,
+    departments.department_name
+  from
+    employees
+  join
+    departments on employees.department_id = departments.department_id
+),
+employee_counts as (
+  -- Count how many employees in each department
+  select
+    department_name,
+    count(*) as num_employees
+  from
+    department_employees
+  group by
+    department_name
+)
+select
+  department_name,
+  num_employees
+from
+  employee_counts
+order by
+  department_name;
+```

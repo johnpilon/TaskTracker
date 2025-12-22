@@ -1,0 +1,326 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Essential security best practices for web application development, covering data security (encryption), API security (rate limiting, CORS, input validation), infrastructure security (environment variables, logging), secure session management, and setting security headers in Next.js."
+glob: ["middleware.ts", "next.config.{js,mjs}", "app/api/**/route.{ts,js}", "src/lib/auth/**/*.{ts,js}", "src/server/auth/**/*.{ts,js}", "src/lib/encryption/**/*.{ts,js}", "src/lib/schemas/**/*.ts", "src/schemas/**/*.ts", "src/server/api/routers/**/*.ts", "src/lib/supabase/middleware.ts", "src/lib/security/**/*.ts", "**/*.sql"]
+---
+
+# Security Best Practices
+
+## Overview
+This document outlines comprehensive security practices for our Next.js application, including data security, API security, and infrastructure security.
+
+## Key Principles
+
+1. Authentication & Authorization
+   - For Supabase authentication implementation details, see [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+   - Implement proper session management
+   - Use proper permission checks
+   - Secure sensitive routes
+
+2. Data Security
+   - Encrypt sensitive data
+   - Implement proper data access controls
+   - Handle PII appropriately
+   - Secure data in transit and at rest
+
+3. API Security
+   - Validate all inputs
+   - Use proper rate limiting
+   - Implement CORS correctly
+   - Secure API endpoints
+
+4. Infrastructure Security
+   - Use secure environment variables
+   - Implement proper logging
+   - Monitor for security events
+   - Regular security audits
+
+## Implementation Guidelines
+
+### Data Security
+
+```typescript
+// ✅ DO: Implement proper data encryption
+import { encrypt, decrypt } from '@/lib/encryption';
+
+interface SensitiveData {
+  ssn: string;
+  dob: string;
+}
+
+async function storeSensitiveData(userId: string, data: SensitiveData) {
+  // Encrypt before storage
+  const encrypted = await encrypt(JSON.stringify(data));
+  
+  await db.sensitiveData.create({
+    data: {
+      userId,
+      encryptedData: encrypted,
+    },
+  });
+}
+
+async function getSensitiveData(userId: string): Promise<SensitiveData> {
+  const record = await db.sensitiveData.findUnique({
+    where: { userId },
+  });
+  
+  if (!record) throw new Error('Not found');
+  
+  // Decrypt after retrieval
+  const decrypted = await decrypt(record.encryptedData);
+  return JSON.parse(decrypted);
+}
+
+// ❌ DON'T: Store sensitive data without encryption
+function badDataStorage(userId: string, ssn: string) {
+  return db.users.update({
+    where: { id: userId },
+    data: { ssn }, // Bad: Storing sensitive data without encryption
+  });
+}
+```
+
+### API Security
+
+```typescript
+// ✅ DO: Implement proper rate limiting
+import { rateLimit } from '@/lib/rate-limit';
+
+export async function POST(request: Request) {
+  try {
+    // Rate limit by IP
+    const ip = request.headers.get('x-forwarded-for') ?? 'unknown';
+    await rateLimit.check(ip, 'api', {
+      points: 10,
+      duration: 60,
+    });
+    
+    // Process request
+    const data = await request.json();
+    return processData(data);
+  } catch (error) {
+    if (error.code === 'RATE_LIMIT') {
+      return new Response('Too many requests', { status: 429 });
+    }
+    throw error;
+  }
+}
+
+// ❌ DON'T: Skip rate limiting or input validation
+async function badApiEndpoint(req: Request) {
+  const data = await req.json();
+  return processData(data); // Bad: No rate limiting or validation
+}
+```
+
+### CORS Configuration
+
+```typescript
+// ✅ DO: Implement proper CORS
+// middleware.ts
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+export function middleware(request: NextRequest) {
+  // Check origin
+  const origin = request.headers.get('origin');
+  
+  // Only allow specific origins
+  if (origin && !isAllowedOrigin(origin)) {
+    return new NextResponse(null, {
+      status: 403,
+      statusText: 'Forbidden',
+    });
+  }
+  
+  const response = NextResponse.next();
+  
+  // Set CORS headers
+  if (origin) {
+    response.headers.set('Access-Control-Allow-Origin', origin);
+    response.headers.set(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PUT, DELETE, OPTIONS'
+    );
+    response.headers.set(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization'
+    );
+  }
+  
+  return response;
+}
+
+// ❌ DON'T: Use permissive CORS
+app.use(cors()); // Bad: Allow all origins
+```
+
+### Input Validation
+
+```typescript
+// ✅ DO: Validate all inputs
+import { z } from 'zod';
+
+const UserSchema = z.object({
+  name: z.string().min(2).max(50),
+  email: z.string().email(),
+  age: z.number().min(13).max(120),
+});
+
+async function createUser(input: unknown) {
+  try {
+    const data = UserSchema.parse(input);
+    return db.user.create({ data });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new ValidationError(error.issues);
+    }
+    throw error;
+  }
+}
+
+// ❌ DON'T: Skip input validation
+function badCreateUser(data: any) {
+  return db.user.create({ data }); // Bad: No validation
+}
+```
+
+### Security Headers
+
+```typescript
+// ✅ DO: Set proper security headers
+// next.config.mjs
+import { headers } from 'next/headers';
+
+export default {
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'X-DNS-Prefetch-Control',
+            value: 'on',
+          },
+          {
+            key: 'Strict-Transport-Security',
+            value: 'max-age=31536000; includeSubDomains',
+          },
+          {
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN',
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'strict-origin-when-cross-origin',
+          },
+          {
+            key: 'Permissions-Policy',
+            value: 'camera=(), microphone=(), geolocation=()',
+          },
+        ],
+      },
+    ];
+  },
+};
+
+// ❌ DON'T: Skip security headers
+export default {
+  // Bad: No security headers configured
+};
+```
+
+### Error Handling
+
+```typescript
+// ✅ DO: Implement secure error handling
+class AppError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number,
+    public code: string
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+  
+  toJSON() {
+    return {
+      error: {
+        code: this.code,
+        message: this.message,
+      },
+    };
+  }
+}
+
+// Error handler middleware
+export function errorHandler(error: unknown) {
+  // Log error for monitoring
+  logger.error(error);
+  
+  if (error instanceof AppError) {
+    return new Response(
+      JSON.stringify(error.toJSON()),
+      {
+        status: error.statusCode,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
+  
+  // Don't expose internal errors
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An internal error occurred',
+      },
+    }),
+    {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+}
+
+// ❌ DON'T: Expose internal errors
+function badErrorHandler(error: Error) {
+  return new Response(error.stack); // Bad: Exposing stack trace
+}
+```
+
+## Security Checklist
+
+1. Data Security
+   - [ ] Sensitive data is encrypted at rest
+   - [ ] PII is properly handled
+   - [ ] Secure key management
+   - [ ] Regular security audits
+
+2. API Security
+   - [ ] Input validation on all endpoints
+   - [ ] Rate limiting implemented
+   - [ ] CORS properly configured
+   - [ ] Security headers set
+
+3. Infrastructure
+   - [ ] Secure environment variables
+   - [ ] Regular dependency updates
+   - [ ] Security monitoring
+   - [ ] Incident response plan
+
+4. Compliance
+   - [ ] GDPR compliance
+   - [ ] Data retention policies
+   - [ ] Privacy policy
+   - [ ] Terms of service

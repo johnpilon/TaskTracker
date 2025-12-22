@@ -1,0 +1,288 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: "Best practices for designing, building, and maintaining APIs using Next.js, tRPC, and Supabase, covering REST principles, performance optimization, security measures, and code organization."
+glob: ["app/api/**/route.{ts,js}", "src/pages/api/**/*.{ts,js}", "src/lib/api/**/*.{ts,js}", "src/server/api/**/*.{ts,js}", "src/server/routers/**/*.{ts,js}", "src/trpc/routers/**/*.{ts,js}"]
+---
+
+# API Best Practices
+
+## Overview
+This document outlines best practices for building APIs in our Next.js application using tRPC and Supabase. It focuses on API design, performance, security, and code organization.
+
+### Related Guides
+- For Next.js-specific patterns, see [Next.js Best Practices](mdc:nextjs-best-practices.mdc)
+- For tRPC implementation, see [tRPC Best Practices](mdc:trpc-best-practices.mdc)
+- For error handling, see [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+- For type safety, see [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+- For database access, see [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+- For security considerations, see [Security Best Practices](mdc:security-best-practices.mdc)
+- For SQL formatting, see [SQL Code Format](mdc:code-format-sql.mdc)
+
+## Key Principles
+
+1. API Design
+   - Follow REST principles
+   - Use consistent naming
+   - Maintain versioning
+   - Document endpoints
+
+2. Performance
+   - Optimize queries
+   - Implement caching
+   - Use pagination
+   - Batch operations
+
+3. Security
+   - Validate inputs
+   - Use authentication
+   - Implement rate limiting
+   - Follow OWASP guidelines
+
+4. Code Organization
+   - Structure by domain
+   - Use middleware
+   - Maintain consistency
+   - Document complex logic
+
+## Implementation Guidelines
+
+### API Design
+When designing APIs, refer to these guides for specific aspects:
+
+1. **Type Safety & Validation**
+   - Use Zod schemas following [Zod Best Practices](mdc:zod-best-practices.mdc)
+   - Implement tRPC procedures following [tRPC Best Practices](mdc:trpc-best-practices.mdc)
+   - Follow type safety guidelines from [TypeScript Best Practices](mdc:typescript-best-practices.mdc)
+
+2. **Database Operations**
+   - Use Supabase features following [Supabase Best Practices](mdc:supabase-best-practices.mdc)
+   - Implement Drizzle ORM patterns from [Drizzle ORM Best Practices](mdc:drizzle-orm-best-practices.mdc)
+   - Follow SQL formatting from [SQL Code Format](mdc:code-format-sql.mdc)
+
+3. **Error Handling**
+   - Implement error handling following [Error Handling and Monitoring](mdc:error-handling-and-monitoring.mdc)
+   - Use proper error codes and messages
+   - Maintain proper logging and monitoring
+
+4. **Security**
+   - Follow security guidelines from [Security Best Practices](mdc:security-best-practices.mdc)
+   - Implement proper authentication and authorization
+   - Use rate limiting and other protection measures
+
+### Performance Optimization
+
+```typescript
+// lib/api/posts.ts
+import { cache } from 'react';
+import { db } from '@/lib/db';
+
+export const getPost = cache(async (id: string) => {
+  return db.post.findUnique({
+    where: { id },
+    include: {
+      author: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+});
+
+export const getPosts = cache(async (params: {
+  limit: number;
+  offset: number;
+}) => {
+  const [posts, total] = await Promise.all([
+    db.post.findMany({
+      take: params.limit,
+      skip: params.offset,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        author: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+    }),
+    db.post.count(),
+  ]);
+  
+  return {
+    posts,
+    total,
+    hasMore: total > params.offset + params.limit,
+  };
+});
+```
+
+### Security Implementation
+
+```typescript
+// middleware.ts
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+import { rateLimit } from '@/lib/rate-limit';
+
+export async function middleware(request: NextRequest) {
+  // Rate limiting
+  const ip = request.ip ?? '127.0.0.1';
+  const { success } = await rateLimit.check(ip);
+  
+  if (!success) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429 }
+    );
+  }
+  
+  // CORS headers
+  const response = NextResponse.next();
+  response.headers.set('Access-Control-Allow-Origin', '*');
+  response.headers.set(
+    'Access-Control-Allow-Methods',
+    'GET, POST, PUT, DELETE, OPTIONS'
+  );
+  response.headers.set(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization'
+  );
+  
+  return response;
+}
+
+export const config = {
+  matcher: '/api/:path*',
+};
+```
+
+### Input Validation
+
+```typescript
+// lib/validations/post.ts
+import { z } from 'zod';
+
+export const postSchema = z.object({
+  title: z.string()
+    .min(1, 'Title is required')
+    .max(100, 'Title must be less than 100 characters'),
+  content: z.string()
+    .min(1, 'Content is required'),
+  published: z.boolean().default(false),
+  categoryId: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+export const updatePostSchema = postSchema.partial().extend({
+  id: z.string(),
+});
+
+// Usage in API route
+export async function POST(req: Request) {
+  const data = await req.json();
+  const validated = postSchema.parse(data);
+  
+  const post = await db.post.create({
+    data: validated,
+  });
+  
+  return NextResponse.json(post, { status: 201 });
+}
+```
+
+### API Documentation
+
+```typescript
+// app/api/docs/[...slug]/route.ts
+import { createSwaggerSpec } from 'next-swagger-doc';
+import { NextResponse } from 'next/server';
+
+const apiSpec = createSwaggerSpec({
+  title: 'API Documentation',
+  version: '1.0.0',
+  openapi: '3.0.0',
+  paths: {
+    '/api/posts': {
+      post: {
+        summary: 'Create a new post',
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: {
+                    type: 'string',
+                    minLength: 1,
+                    maxLength: 100,
+                  },
+                  content: {
+                    type: 'string',
+                    minLength: 1,
+                  },
+                  published: {
+                    type: 'boolean',
+                    default: false,
+                  },
+                },
+                required: ['title', 'content'],
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: 'Post created successfully',
+          },
+          400: {
+            description: 'Invalid input',
+          },
+        },
+      },
+    },
+  },
+});
+
+export async function GET() {
+  return NextResponse.json(apiSpec);
+}
+```
+
+## Best Practices Summary
+
+1. **API Design**
+   - Use consistent naming
+   - Follow REST principles
+   - Implement versioning
+   - Document endpoints
+
+2. **Performance**
+   - Optimize database queries
+   - Implement proper caching
+   - Use pagination
+   - Batch operations
+
+3. **Security**
+   - Validate all inputs
+   - Use proper authentication
+   - Implement rate limiting
+   - Follow security guidelines
+
+4. **Code Organization**
+   - Group by domain
+   - Use middleware
+   - Maintain consistency
+   - Document complex logic
+
+5. **Documentation**
+   - Use OpenAPI/Swagger
+   - Document all endpoints
+   - Include examples
+   - Keep docs updated
