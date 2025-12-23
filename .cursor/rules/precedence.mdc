@@ -108,3 +108,5 @@ Cursor MUST NOT:
 
 Cursor must treat this file as authoritative.
 Any deviation from this policy requires explicit user approval.
+
+Documentation Integrity rules override best-practice or cleanup suggestions when updating existing documents.

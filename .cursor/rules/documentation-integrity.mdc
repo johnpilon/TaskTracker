@@ -1,0 +1,50 @@
+---
+alwaysApply: true
+---
+# Documentation Integrity Rule
+
+This project contains living engineering documents that act as guardrails.
+They must reflect **what exists now**, not plans, aspirations, or inferred improvements.
+
+## Hard Rules
+
+- Documentation updates must be **factual and past-tense only**.
+- Do NOT rewrite, restructure, or “improve” documents unless explicitly instructed.
+- Do NOT add new philosophy, future plans, or speculative ideas.
+- Do NOT convert implemented work back into “planned” language.
+- Do NOT duplicate sections that already exist.
+
+## Planned vs Implemented
+
+- If a feature/component has been implemented, it must be documented as **implemented**.
+- If a section describes a feature as “planned” but it already exists, the section must be corrected or marked obsolete.
+- Never leave contradictory “planned” and “implemented” descriptions in the same document.
+
+## Allowed Changes Without Explicit Permission
+
+You MAY:
+- Add a clearly labeled **Current State** or **Post-Change** section describing completed work.
+- Update wording to reflect that a planned item has been completed.
+- Add small factual deltas after a refactor or extraction.
+
+You may NOT:
+- Rephrase existing sections for clarity.
+- Expand scope.
+- Introduce new concepts.
+- Change section ordering or hierarchy.
+
+## Style Constraints
+
+- Preserve existing Markdown structure and heading levels.
+- Use concise bullet points.
+- Prefer accuracy over completeness.
+- When unsure, ask instead of guessing.
+
+## Priority
+
+If there is a conflict between:
+- Existing documentation
+- Inferred intent
+- Code reality
+
+**Code reality wins**, and documentation must be updated to match it.
