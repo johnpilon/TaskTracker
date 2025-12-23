@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import TaskRow from '../components/TaskRow';
+import usePersistentTasks from '../hooks/usePersistentTasks';
 
 /* =======================
    Types
 ======================= */
 
-interface Task {
+export interface Task {
   id: string;
   text: string;
   createdAt: string;
@@ -37,38 +39,12 @@ const MAX_INDENT = 2;
 const INDENT_WIDTH = 28;
 
 /* =======================
-   Drag Handle
-======================= */
-
-const DragHandle = ({
-  onPointerDown,
-}: {
-  onPointerDown: (e: React.PointerEvent) => void;
-}) => (
-  <div
-    onPointerDown={onPointerDown}
-    className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground select-none self-center touch-none"
-    title="Drag to reorder. Drag left/right to indent."
-  >
-    <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
-      <circle cx="3" cy="3" r="1.5" />
-      <circle cx="9" cy="3" r="1.5" />
-      <circle cx="3" cy="8" r="1.5" />
-      <circle cx="9" cy="8" r="1.5" />
-      <circle cx="3" cy="13" r="1.5" />
-      <circle cx="9" cy="13" r="1.5" />
-    </svg>
-  </div>
-);
-
-/* =======================
    Page
 ======================= */
 
 export default function Home() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = usePersistentTasks();
   const [input, setInput] = useState('');
-  const [hydrated, setHydrated] = useState(false);
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -166,15 +142,6 @@ export default function Home() {
   }, [editingId, caretPos]);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('tasks');
-      if (stored) setTasks(JSON.parse(stored));
-    } finally {
-      setHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
     if (tasks.length === 0) {
       if (activeTaskId !== null) setActiveTaskId(null);
       return;
@@ -208,12 +175,6 @@ export default function Home() {
       pendingFocusRef.current = null;
     });
   }, [tasks]);
-
-  useEffect(() => {
-    if (hydrated) {
-      localStorage.setItem('tasks', JSON.stringify(tasks));
-    }
-  }, [tasks, hydrated]);
 
   /* =======================
      Undo
@@ -444,6 +405,149 @@ export default function Home() {
     setCaretPos(0);
   };
 
+  const handleTextareaKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+    index: number,
+    task: Task
+  ) => {
+    const el = e.currentTarget;
+    const selStart = el.selectionStart ?? 0;
+    const selEnd = el.selectionEnd ?? 0;
+    const hasSelection = selStart !== selEnd;
+
+    // Backspace merge
+    if (!hasSelection && e.key === 'Backspace' && selStart === 0) {
+      e.preventDefault();
+      if (index === 0) return;
+
+      const prev = tasks[index - 1];
+      const merged = prev.text + editingText;
+
+      setUndoAction({
+        type: 'merge',
+        direction: 'backward',
+        keptOriginal: prev,
+        removed: task,
+        caret: 0,
+      });
+
+      setTasks(prevTasks => {
+        const next = [...prevTasks];
+        next[index - 1] = { ...prev, text: merged };
+        next.splice(index, 1);
+        return next;
+      });
+
+      setEditingId(prev.id);
+      setEditingText(merged);
+      setCaretPos(prev.text.length);
+      return;
+    }
+
+    // Arrow navigation while editing:
+    // - ArrowUp at start jumps to previous item (edit at end)
+    // - ArrowDown at end jumps to next item (edit at end)
+    if (!hasSelection && e.key === 'ArrowUp' && selStart === 0) {
+      e.preventDefault();
+      if (index === 0) return;
+
+      // Commit this row text before switching
+      if (editingText !== task.text) {
+        setUndoAction({ type: 'edit', task });
+        setTasks(prev =>
+          prev.map(t => (t.id === task.id ? { ...t, text: editingText } : t))
+        );
+      }
+
+      const prevTask = tasks[index - 1];
+      setActiveTaskId(prevTask.id);
+      setEditingId(prevTask.id);
+      setEditingText(prevTask.text);
+      setCaretPos(prevTask.text.length);
+      return;
+    }
+
+    if (
+      !hasSelection &&
+      e.key === 'ArrowDown' &&
+      selEnd === editingText.length
+    ) {
+      e.preventDefault();
+      if (index >= tasks.length - 1) return;
+
+      if (editingText !== task.text) {
+        setUndoAction({ type: 'edit', task });
+        setTasks(prev =>
+          prev.map(t => (t.id === task.id ? { ...t, text: editingText } : t))
+        );
+      }
+
+      const nextTask = tasks[index + 1];
+      setActiveTaskId(nextTask.id);
+      setEditingId(nextTask.id);
+      setEditingText(nextTask.text);
+      setCaretPos(nextTask.text.length);
+      return;
+    }
+
+    // Delete merge: at end of row, pull next row's text up (undoable)
+    if (!hasSelection && e.key === 'Delete' && selEnd === editingText.length) {
+      e.preventDefault();
+      if (index >= tasks.length - 1) return;
+
+      const nextTask = tasks[index + 1];
+      const merged = editingText + nextTask.text;
+
+      setUndoAction({
+        type: 'merge',
+        direction: 'forward',
+        keptOriginal: task,
+        removed: nextTask,
+        caret: editingText.length,
+      });
+
+      setTasks(prevTasks => {
+        const next = [...prevTasks];
+        next[index] = { ...task, text: merged };
+        next.splice(index + 1, 1);
+        return next;
+      });
+
+      setEditingText(merged);
+      setCaretPos(editingText.length);
+      return;
+    }
+
+    // Split row
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+
+      const cursor = el.selectionStart ?? editingText.length;
+      splitTaskAt(task, index, cursor);
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      setUndoAction({ type: 'indent', task });
+      setTasks(prev =>
+        prev.map(t =>
+          t.id === task.id
+            ? {
+                ...t,
+                indent: Math.max(
+                  0,
+                  Math.min(MAX_INDENT, t.indent + (e.shiftKey ? -1 : 1))
+                ),
+              }
+            : t
+        )
+      );
+    }
+
+    if (e.key === 'Escape') saveEdit(task);
+  };
+
   const handleRowKeyDownCapture = (
     e: React.KeyboardEvent,
     index: number,
@@ -639,233 +743,47 @@ export default function Home() {
         />
 
         <div className="mt-8 space-y-2" role="list" ref={listRef}>
-          {tasks.map((task, index) => (
-            (() => {
-              const isActive =
-                activeTaskId === task.id || (activeTaskId === null && index === 0);
+          {tasks.map((task, index) => {
+            const isActive =
+              activeTaskId === task.id || (activeTaskId === null && index === 0);
 
-              return (
-            <div
-              key={task.id}
-              ref={el => (rowRefs.current[index] = el)}
-              role="listitem"
-              tabIndex={isActive ? 0 : -1}
-              onFocus={() => setActiveTaskId(task.id)}
-              onMouseDown={e => {
-                const t = e.target as HTMLElement | null;
-                if (t?.closest('input,textarea,button')) return;
-                setActiveTaskId(task.id);
-                requestAnimationFrame(() => rowRefs.current[index]?.focus());
-              }}
-              onKeyDownCapture={e => handleRowKeyDownCapture(e, index, task)}
-              className={`group flex items-center gap-3 border border-border rounded-lg px-4 py-3 bg-card
-                ${dragIndex === index ? 'ring-2 ring-ring shadow-lg' : ''}
-                ${isActive && dragIndex !== index ? 'ring-1 ring-border' : ''}
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-ring
-              `}
-            >
-              {/* Indent rail */}
-              <div style={{ width: task.indent * INDENT_WIDTH }} className="flex">
-                {Array.from({ length: task.indent }).map((_, i) => (
-                  <div key={i} className="w-1 mx-[6px] bg-border rounded" />
-                ))}
-              </div>
-
-              <DragHandle onPointerDown={e => handlePointerDown(index, e)} />
-
-              <input
-                type="checkbox"
-                checked={task.completed}
-                onChange={() => toggleTask(task)}
-                className="h-5 w-5 accent-muted-foreground"
+            return (
+              <TaskRow
+                key={task.id}
+                task={task}
+                index={index}
+                isActive={isActive}
+                dragIndex={dragIndex}
+                indentWidth={INDENT_WIDTH}
+                rowRef={el => (rowRefs.current[index] = el)}
+                onFocusRow={() => setActiveTaskId(task.id)}
+                onMouseDownRow={e => {
+                  const t = e.target as HTMLElement | null;
+                  if (t?.closest('input,textarea,button')) return;
+                  setActiveTaskId(task.id);
+                  requestAnimationFrame(() => rowRefs.current[index]?.focus());
+                }}
+                onKeyDownCapture={e => handleRowKeyDownCapture(e, index, task)}
+                onPointerDown={e => handlePointerDown(index, e)}
+                onToggle={() => toggleTask(task)}
+                isEditing={editingId === task.id}
+                editingText={editingText}
+                editInputRef={editInputRef}
+                onChangeEditingText={value => setEditingText(value)}
+                onTextareaKeyDown={e => handleTextareaKeyDown(e, index, task)}
+                onTextareaBlur={() => saveEdit(task)}
+                onTextClick={e => {
+                  const el = e.currentTarget;
+                  const caret =
+                    getCaretOffsetFromPoint(el, e.clientX, e.clientY) ??
+                    task.text.length;
+                  setActiveTaskId(task.id);
+                  startEditing(task, Math.min(task.text.length, caret));
+                }}
+                onDelete={() => deleteTask(task, index)}
               />
-
-              {editingId === task.id ? (
-                <textarea
-                  ref={editInputRef}
-                  value={editingText}
-                  rows={1}
-                  onChange={e => {
-                    setEditingText(e.target.value);
-                    e.currentTarget.style.height = 'auto';
-                    e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
-                  }}
-                  onKeyDown={e => {
-                    const el = e.currentTarget;
-                    const selStart = el.selectionStart ?? 0;
-                    const selEnd = el.selectionEnd ?? 0;
-                    const hasSelection = selStart !== selEnd;
-
-                    // Backspace merge
-                    if (!hasSelection && e.key === 'Backspace' && selStart === 0) {
-                      e.preventDefault();
-                      if (index === 0) return;
-
-                      const prev = tasks[index - 1];
-                      const merged = prev.text + editingText;
-
-                      setUndoAction({
-                        type: 'merge',
-                        direction: 'backward',
-                        keptOriginal: prev,
-                        removed: task,
-                        caret: 0,
-                      });
-
-                      setTasks(prevTasks => {
-                        const next = [...prevTasks];
-                        next[index - 1] = { ...prev, text: merged };
-                        next.splice(index, 1);
-                        return next;
-                      });
-
-                      setEditingId(prev.id);
-                      setEditingText(merged);
-                      setCaretPos(prev.text.length);
-                      return;
-                    }
-
-                    // Arrow navigation while editing:
-                    // - ArrowUp at start jumps to previous item (edit at end)
-                    // - ArrowDown at end jumps to next item (edit at end)
-                    if (!hasSelection && e.key === 'ArrowUp' && selStart === 0) {
-                      e.preventDefault();
-                      if (index === 0) return;
-
-                      // Commit this row text before switching
-                      if (editingText !== task.text) {
-                        setUndoAction({ type: 'edit', task });
-                        setTasks(prev =>
-                          prev.map(t =>
-                            t.id === task.id ? { ...t, text: editingText } : t
-                          )
-                        );
-                      }
-
-                      const prevTask = tasks[index - 1];
-                      setActiveTaskId(prevTask.id);
-                      setEditingId(prevTask.id);
-                      setEditingText(prevTask.text);
-                      setCaretPos(prevTask.text.length);
-                      return;
-                    }
-
-                    if (
-                      !hasSelection &&
-                      e.key === 'ArrowDown' &&
-                      selEnd === editingText.length
-                    ) {
-                      e.preventDefault();
-                      if (index >= tasks.length - 1) return;
-
-                      if (editingText !== task.text) {
-                        setUndoAction({ type: 'edit', task });
-                        setTasks(prev =>
-                          prev.map(t =>
-                            t.id === task.id ? { ...t, text: editingText } : t
-                          )
-                        );
-                      }
-
-                      const nextTask = tasks[index + 1];
-                      setActiveTaskId(nextTask.id);
-                      setEditingId(nextTask.id);
-                      setEditingText(nextTask.text);
-                      setCaretPos(nextTask.text.length);
-                      return;
-                    }
-
-                    // Delete merge: at end of row, pull next row's text up (undoable)
-                    if (!hasSelection && e.key === 'Delete' && selEnd === editingText.length) {
-                      e.preventDefault();
-                      if (index >= tasks.length - 1) return;
-
-                      const nextTask = tasks[index + 1];
-                      const merged = editingText + nextTask.text;
-
-                      setUndoAction({
-                        type: 'merge',
-                        direction: 'forward',
-                        keptOriginal: task,
-                        removed: nextTask,
-                        caret: editingText.length,
-                      });
-
-                      setTasks(prevTasks => {
-                        const next = [...prevTasks];
-                        next[index] = { ...task, text: merged };
-                        next.splice(index + 1, 1);
-                        return next;
-                      });
-
-                      setEditingText(merged);
-                      setCaretPos(editingText.length);
-                      return;
-                    }
-
-                    // Split row
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-
-                      const cursor = el.selectionStart ?? editingText.length;
-                      splitTaskAt(task, index, cursor);
-                      return;
-                    }
-
-                    if (e.key === 'Tab') {
-                      e.preventDefault();
-                      setUndoAction({ type: 'indent', task });
-                      setTasks(prev =>
-                        prev.map(t =>
-                          t.id === task.id
-                            ? {
-                                ...t,
-                                indent: Math.max(
-                                  0,
-                                  Math.min(
-                                    MAX_INDENT,
-                                    t.indent + (e.shiftKey ? -1 : 1)
-                                  )
-                                ),
-                              }
-                            : t
-                        )
-                      );
-                    }
-
-                    if (e.key === 'Escape') saveEdit(task);
-                  }}
-                  onBlur={() => saveEdit(task)}
-                  className="flex-1 min-w-0 bg-transparent text-lg resize-none overflow-hidden focus:outline-none
-                             whitespace-pre-wrap break-words overflow-wrap-anywhere"
-                />
-              ) : (
-                <span
-                  onClick={e => {
-                    const el = e.currentTarget;
-                    const caret =
-                      getCaretOffsetFromPoint(el, e.clientX, e.clientY) ??
-                      task.text.length;
-                    setActiveTaskId(task.id);
-                    startEditing(task, Math.min(task.text.length, caret));
-                  }}
-                  className="flex-1 min-w-0 text-lg cursor-text whitespace-pre-wrap
-                             break-words overflow-wrap-anywhere"
-                >
-                  {task.text}
-                </span>
-              )}
-
-              <button
-                onClick={() => deleteTask(task, index)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
-              >
-                🗑️
-              </button>
-            </div>
-              );
-            })()
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
