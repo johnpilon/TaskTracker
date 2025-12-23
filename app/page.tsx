@@ -47,7 +47,7 @@ const DragHandle = ({
 }) => (
   <div
     onPointerDown={onPointerDown}
-    className="cursor-grab active:cursor-grabbing text-neutral-400 hover:text-neutral-200 select-none self-center touch-none"
+    className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground select-none self-center touch-none"
     title="Drag to reorder. Drag left/right to indent."
   >
     <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
@@ -627,7 +627,7 @@ export default function Home() {
   ======================= */
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 p-8">
+    <div className="min-h-screen bg-background text-foreground p-8">
       <div className="max-w-3xl mx-auto">
         <input
           ref={inputRef}
@@ -635,7 +635,7 @@ export default function Home() {
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && addTask()}
           placeholder="What needs to be done?"
-          className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-6 py-4 text-xl focus:outline-none"
+          className="w-full bg-card border border-border rounded-lg px-6 py-4 text-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
 
         <div className="mt-8 space-y-2" role="list" ref={listRef}>
@@ -658,16 +658,16 @@ export default function Home() {
                 requestAnimationFrame(() => rowRefs.current[index]?.focus());
               }}
               onKeyDownCapture={e => handleRowKeyDownCapture(e, index, task)}
-              className={`group flex items-center gap-3 border border-neutral-800 rounded-lg px-4 py-3 bg-neutral-900
-                ${dragIndex === index ? 'ring-2 ring-neutral-600 shadow-lg' : ''}
-                ${isActive && dragIndex !== index ? 'ring-1 ring-neutral-700' : ''}
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500
+              className={`group flex items-center gap-3 border border-border rounded-lg px-4 py-3 bg-card
+                ${dragIndex === index ? 'ring-2 ring-ring shadow-lg' : ''}
+                ${isActive && dragIndex !== index ? 'ring-1 ring-border' : ''}
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-ring
               `}
             >
               {/* Indent rail */}
               <div style={{ width: task.indent * INDENT_WIDTH }} className="flex">
                 {Array.from({ length: task.indent }).map((_, i) => (
-                  <div key={i} className="w-1 mx-[6px] bg-neutral-700 rounded" />
+                  <div key={i} className="w-1 mx-[6px] bg-border rounded" />
                 ))}
               </div>
 
@@ -677,7 +677,7 @@ export default function Home() {
                 type="checkbox"
                 checked={task.completed}
                 onChange={() => toggleTask(task)}
-                className="h-5 w-5 accent-neutral-500"
+                className="h-5 w-5 accent-muted-foreground"
               />
 
               {editingId === task.id ? (
@@ -858,7 +858,7 @@ export default function Home() {
 
               <button
                 onClick={() => deleteTask(task, index)}
-                className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400"
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
               >
                 🗑️
               </button>

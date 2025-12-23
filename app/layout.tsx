@@ -1,10 +1,27 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import { ThemeManager } from '@/components/theme-manager';
+import { ThemeSwitcher } from '@/components/theme-switcher';
 
 const inter = Inter({ subsets: ['latin'] });
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+
+const themeInitScript = `
+(() => {
+  try {
+    const key = 'theme';
+    const override = localStorage.getItem(key);
+    const isOverride = override === 'light' || override === 'dark';
+    const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = isOverride ? override : (systemDark ? 'dark' : 'light');
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  } catch {
+    // no-op
+  }
+})();
+`.trim();
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -33,8 +50,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body className={inter.className}>
+        <ThemeManager />
+        <div className="fixed right-4 top-4 z-50">
+          <ThemeSwitcher />
+        </div>
+        {children}
+      </body>
     </html>
   );
 }
