@@ -10,7 +10,10 @@ interface TaskRowProps {
   index: number;
   isActive: boolean;
   dragIndex: number | null;
+  effectiveIndent: number;
   indentWidth: number;
+  activeTags?: string[];
+  onTagClick?: unknown;
   // NOTE: These are runtime-only callbacks/refs coming from the parent client component.
   // We intentionally type-erase them to satisfy Next.js "client boundary" serializable-props checks.
   rowRef: unknown;
@@ -56,7 +59,10 @@ export default function TaskRow({
   index,
   isActive,
   dragIndex,
+  effectiveIndent,
   indentWidth,
+  activeTags,
+  onTagClick,
   rowRef,
   onFocusRow,
   onMouseDownRow,
@@ -76,6 +82,60 @@ export default function TaskRow({
   const completedClass = task.completed
     ? 'text-muted-foreground line-through'
     : '';
+
+  // Active tag emphasis is semantic (token-based), not substring search-based.
+  const renderTextWithActiveTags = (text: string) => {
+    const active = new Set((activeTags ?? []).map(t => t.toLowerCase()));
+    if (active.size === 0) return text;
+
+    const parts: Array<string | React.ReactElement> = [];
+    const TAG_TOKEN_REGEX = /(^|\s)(#[a-zA-Z0-9_-]+)/g;
+
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = TAG_TOKEN_REGEX.exec(text))) {
+      const leading = m[1] ?? '';
+      const token = m[2] ?? '';
+      const tokenStart = m.index + leading.length;
+      const tokenEnd = tokenStart + token.length;
+
+      if (tokenStart > lastIndex) {
+        parts.push(text.slice(lastIndex, tokenStart));
+      }
+
+      const normalized = token.slice(1).toLowerCase();
+      if (active.has(normalized)) {
+        // Active tags are emphasized to reflect the current composed view.
+        parts.push(
+          <mark
+            key={`${tokenStart}-${tokenEnd}`}
+            // Highlight intensity reflects semantic strength:
+            // search match < active tag
+            className="bg-primary/[0.28] ring-2 ring-primary/[0.45] rounded px-0.5"
+          >
+            {token}
+          </mark>
+        );
+      } else {
+        parts.push(token);
+      }
+
+      lastIndex = tokenEnd;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+
+    return parts;
+  };
+
+  // Tags are entry points into tag views via search-as-lens.
+  // Clicking a tag simply populates the search query.
+  const handleTagClick = (tag: string) => {
+    if (!onTagClick) return;
+    (onTagClick as any)(tag);
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     (onChangeEditingText as any)(e.target.value);
@@ -115,10 +175,10 @@ export default function TaskRow({
 
       {/* Indent rail */}
       <div
-        style={{ width: task.indent * indentWidth }}
+        style={{ width: effectiveIndent * indentWidth }}
         className="flex self-start mt-[6px]"
       >
-        {Array.from({ length: task.indent }).map((_, i) => (
+        {Array.from({ length: effectiveIndent }).map((_, i) => (
           <div key={i} className="w-1 mx-[6px] bg-border rounded" />
         ))}
       </div>
@@ -175,9 +235,11 @@ export default function TaskRow({
               )}
             >
               {task.text.length > 0
-                ? searchQuery
-                  ? highlightMatches(task.text, searchQuery)
-                  : task.text
+                ? activeTags && activeTags.length > 0
+                  ? renderTextWithActiveTags(task.text)
+                  : searchQuery
+                    ? highlightMatches(task.text, searchQuery)
+                    : task.text
                 : '\u00A0'}
             </div>
 
@@ -186,7 +248,30 @@ export default function TaskRow({
                 className="col-start-1 row-start-2 mt-0.5 text-[10px] leading-none font-mono opacity-50 truncate"
                 style={{ fontFamily: 'monospace' }}
               >
-                tags: [{task.tags.join(', ')}]
+                tags:{' '}
+                [
+                {task.tags.map((tag, i) => (
+                  <span key={tag}>
+                    {i > 0 ? ', ' : ''}
+                    <button
+                      type="button"
+                      className="p-0 m-0 bg-transparent border-0 cursor-pointer text-inherit focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+                      onMouseDown={e => {
+                        // prevent row text selection / edit activation
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleTagClick(tag);
+                      }}
+                    >
+                      {tag}
+                    </button>
+                  </span>
+                ))}
+                ]
               </div>
             )}
           </>

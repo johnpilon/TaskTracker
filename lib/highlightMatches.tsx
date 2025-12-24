@@ -10,7 +10,9 @@ export const highlightMatches = (text: string, query: string) => {
     regex.test(part) ? (
       <mark
         key={i}
-        className="bg-primary/10 rounded px-0.5"
+        // Highlight intensity reflects semantic strength:
+        // search match < active tag
+        className="bg-primary/[0.08] rounded px-0.5"
       >
         {part}
       </mark>

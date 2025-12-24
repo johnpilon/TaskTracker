@@ -58,6 +58,7 @@ export default function Home() {
   const [tasks, setTasks] = usePersistentTasks();
   const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [recentViews, setRecentViews] = useState<string[]>([]);
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -120,6 +121,25 @@ export default function Home() {
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const computeTags = (text: string) => parseTaskMeta(text).tags;
+  const searchOverlayInnerRef = useRef<HTMLDivElement | null>(null);
+
+  const MAX_RECENT_VIEWS = 8;
+  // Recent views are ephemeral shortcuts, not saved state.
+  // Recent views are capped internally but rendered freely by layout.
+  const canonicalizeViewQuery = (q: string) => q.trim().replace(/\s+/g, ' ');
+  const commitRecentView = (q: string) => {
+    const next = canonicalizeViewQuery(q);
+    if (next.length === 0) return;
+
+    setRecentViews(prev => {
+      const nextKey = next.toLowerCase();
+      const prevFirstKey = (prev[0] ?? '').toLowerCase();
+      if (nextKey === prevFirstKey) return prev; // don't add same view twice in a row
+
+      const deduped = prev.filter(v => v.toLowerCase() !== nextKey);
+      return [next, ...deduped].slice(0, MAX_RECENT_VIEWS);
+    });
+  };
 
   const deriveViewState = (raw: string): ViewState | null => {
     const query = raw.trim().toLowerCase();
@@ -133,6 +153,28 @@ export default function Home() {
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);
+
+  // Tag clicks compose only with other tags.
+  // Text searches are exploratory and replaced by tag views.
+  const handleTagSearchClick = (rawTag: string) => {
+    const clicked = `#${rawTag.trim().toLowerCase()}`;
+    if (clicked === '#') return;
+
+    setSearchQuery(prev => {
+      const current = prev.trim().toLowerCase();
+      if (current.length === 0) return clicked;
+
+      const tokens = tokenizeQuery(current);
+      const isTagOnly = tokens.every(t => t.startsWith('#') && t.length > 1);
+
+      // If any non-tag token exists, replace with just the clicked tag.
+      if (!isTagOnly) return clicked;
+
+      // Tag-only query: compose with AND (space-separated), no duplicates.
+      if (tokens.includes(clicked)) return prev;
+      return [...tokens, clicked].join(' ');
+    });
+  };
 
   const filterTasksBySearch = (task: Task, query: string): boolean => {
     const tokens = tokenizeQuery(query);
@@ -1018,6 +1060,102 @@ export default function Home() {
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const viewState = deriveViewState(searchQuery);
+  const activeTagTokens = (() => {
+    if (!viewState) return [] as string[];
+    const tokens = tokenizeQuery(viewState.query);
+    // Normalize + de-dupe while preserving token order.
+    const seen = new Set<string>();
+    const tags: string[] = [];
+    for (const t of tokens) {
+      if (!t.startsWith('#') || t.length <= 1) continue;
+      if (seen.has(t)) continue;
+      seen.add(t);
+      tags.push(t);
+    }
+    return tags;
+  })();
+
+  const isTagView = (() => {
+    if (!viewState) return false;
+    const tokens = tokenizeQuery(viewState.query);
+    if (tokens.length === 0) return false;
+    return tokens.every(t => t.startsWith('#') && t.length > 1);
+  })();
+
+  const removeTagTokenFromSearch = (tagToken: string) => {
+    setSearchQuery(prev => {
+      const tokens = tokenizeQuery(prev);
+      const next = tokens.filter(t => t !== tagToken);
+      return next.length > 0 ? next.join(' ') : '';
+    });
+  };
+
+  const activeFilterTokens = (() => {
+    if (!viewState) return [] as Array<{ display: string; key: string }>;
+    const raw = canonicalizeViewQuery(searchQuery);
+    if (raw.length === 0) return [];
+    return raw
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(t => ({ display: t, key: t.toLowerCase() }));
+  })();
+
+  const removeFilterTokenFromSearch = (tokenKey: string) => {
+    setSearchQuery(prev => {
+      const raw = canonicalizeViewQuery(prev);
+      if (raw.length === 0) return '';
+      const tokens = raw.split(/\s+/).filter(Boolean);
+      const idx = tokens.findIndex(t => t.toLowerCase() === tokenKey);
+      if (idx < 0) return prev;
+      const next = [...tokens.slice(0, idx), ...tokens.slice(idx + 1)];
+      return next.join(' ');
+    });
+  };
+
+  const renderTagTokenizedQuery = (query: string) => {
+    const TAG_TOKEN_REGEX = /#[a-zA-Z0-9_-]+/g;
+    const parts: React.ReactNode[] = [];
+
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_TOKEN_REGEX.exec(query))) {
+      const start = match.index;
+      const token = match[0] ?? '';
+      const end = start + token.length;
+
+      if (start > lastIndex) {
+        parts.push(query.slice(lastIndex, start));
+      }
+
+      // The search input is the source of truth.
+      // Tag tokenization here is visual-only; text editing remains native.
+      parts.push(
+        <span
+          key={`${start}-${end}`}
+          className="bg-muted/40 outline outline-1 outline-border/60 rounded-sm"
+        >
+          {token}
+        </span>
+      );
+
+      lastIndex = end;
+    }
+
+    if (lastIndex < query.length) {
+      parts.push(query.slice(lastIndex));
+    }
+
+    return parts;
+  };
+
+  useEffect(() => {
+    // Commit view to recents only after a short pause (avoid every keystroke).
+    const q = canonicalizeViewQuery(searchQuery);
+    if (q.length === 0) return;
+
+    const t = window.setTimeout(() => commitRecentView(q), 800);
+    return () => window.clearTimeout(t);
+  }, [searchQuery]);
 
   // Search acts as a temporary view (lens) over tasks.
   // Views never mutate tasks and are exited by clearing search.
@@ -1046,21 +1184,71 @@ export default function Home() {
 
         {/* 🔍 Search input */}
         <div className="relative mt-4">
+          {isTagView && (
+            <div
+              aria-hidden
+              className="absolute inset-0 z-0 px-5 py-3 pr-12 text-base text-foreground pointer-events-none whitespace-pre overflow-hidden"
+            >
+              <div
+                ref={searchOverlayInnerRef}
+                className="whitespace-pre"
+              >
+                {renderTagTokenizedQuery(searchQuery)}
+              </div>
+            </div>
+          )}
           <input
             ref={searchInputRef}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
+            onBlur={() => commitRecentView(searchQuery)}
             onKeyDown={e => {
+              // Backspace removes the last active tag when search is empty.
+              if (
+                e.key === 'Backspace' &&
+                isTagView &&
+                activeTagTokens.length > 0 &&
+                e.currentTarget.selectionStart === e.currentTarget.selectionEnd &&
+                e.currentTarget.selectionStart === e.currentTarget.value.length
+              ) {
+                e.preventDefault();
+                setSearchQuery(prev => {
+                  const tokens = tokenizeQuery(prev);
+                  const isTagOnly = tokens.every(t => t.startsWith('#') && t.length > 1);
+                  if (!isTagOnly || tokens.length === 0) return prev;
+                  tokens.pop();
+                  return tokens.length > 0 ? tokens.join(' ') : '';
+                });
+                return;
+              }
+
+              if (e.key === 'Enter') {
+                commitRecentView(searchQuery);
+              }
+
               if (e.key === 'Escape') {
                 e.preventDefault();
                 setSearchQuery('');
                 searchInputRef.current?.focus();
               }
             }}
+            onScroll={e => {
+              const el = searchOverlayInnerRef.current;
+              if (!el) return;
+              el.style.transform = `translateX(-${e.currentTarget.scrollLeft}px)`;
+            }}
             placeholder="Search tasks or #tags"
             className="w-full bg-card border border-border rounded-lg px-5 py-3 pr-12 text-base
                        text-foreground placeholder:text-muted-foreground
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            style={
+              isTagView
+                ? {
+                    color: 'transparent',
+                    caretColor: 'hsl(var(--foreground))',
+                  }
+                : undefined
+            }
           />
 
           {searchQuery && (
@@ -1085,10 +1273,123 @@ export default function Home() {
           )}
         </div>
 
+        {/* Active filters represent current state.
+            Recent views are navigational history and must remain visually distinct. */}
+        {viewState !== null && activeFilterTokens.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {activeFilterTokens.map(t => (
+              <div
+                key={`${t.key}-${t.display}`}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full',
+                  'border border-border bg-card/30',
+                  'px-2 py-1 text-xs text-muted-foreground'
+                )}
+              >
+                <span className={t.display.startsWith('#') ? 'font-mono' : undefined}>
+                  {t.display}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${t.display}`}
+                  className={cn(
+                    'ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full',
+                    'text-muted-foreground/80 hover:text-foreground',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  )}
+                  onClick={() => removeFilterTokenFromSearch(t.key)}
+                >
+                  <span aria-hidden>×</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Recent views visibility is based on history existence, not input focus. */}
+        {recentViews.length > 0 && (
+          <div className="mt-4">
+            <div className="text-[10px] tracking-wider text-muted-foreground/70">
+              Recent
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {recentViews.map(q => (
+                <div
+                  key={q}
+                  className={cn(
+                    'h-8 max-w-full',
+                    'inline-flex items-center rounded-full',
+                    'border border-border/70 bg-muted/20',
+                    'text-xs text-muted-foreground'
+                  )}
+                  title={q}
+                >
+                  <button
+                    type="button"
+                    className={cn(
+                      'h-full max-w-full px-3',
+                      'inline-flex items-center',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full'
+                    )}
+                    onMouseDown={e => {
+                      // keep focus behavior predictable on mobile/desktop
+                      e.preventDefault();
+                    }}
+                    onClick={() => {
+                      const next = canonicalizeViewQuery(q);
+                      setSearchQuery(next);
+                      commitRecentView(next);
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    <span className="truncate">{q}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label={`Remove recent view ${q}`}
+                    className={cn(
+                      'mr-1 inline-flex h-6 w-6 items-center justify-center rounded-full',
+                      'text-muted-foreground/70 hover:text-foreground',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                    )}
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setRecentViews(prev => prev.filter(v => v !== q));
+                    }}
+                  >
+                    <span aria-hidden>×</span>
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                className={cn(
+                  'h-8 px-2',
+                  'inline-flex items-center',
+                  'text-xs text-muted-foreground/80 hover:text-foreground',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded'
+                )}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => setRecentViews([])}
+              >
+                Clear recent
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Optional indicator */}
+        {/* Tag views and text views share mechanics but have distinct visual identity. */}
         {viewState !== null && (
           <div className="mt-2 text-[10px] tracking-wider text-muted-foreground/70">
-            Viewing results
+            {isTagView ? 'Viewing tag' : 'Viewing results'}
           </div>
         )}
         {normalizedQuery.length > 0 && (
@@ -1102,7 +1403,11 @@ export default function Home() {
         <div
           className={cn(
             'mt-8 space-y-2 relative',
-            viewState !== null ? 'border-l-[6px] border-accent pl-5' : ''
+            viewState !== null
+              ? isTagView
+                ? 'border-l-[6px] border-primary/80 pl-5'
+                : 'border-l-[6px] border-accent pl-5'
+              : ''
           )}
           role="list"
           ref={listRef}
@@ -1112,6 +1417,10 @@ export default function Home() {
               activeTaskId === task.id ||
               (activeTaskId === null && visibleIndex === 0);
 
+            // When a view is active, hierarchy is flattened for clarity.
+            // Views are lenses, not structure.
+            const effectiveIndent = viewState !== null ? 0 : task.indent;
+
             return (
               <TaskRow
                 key={task.id}
@@ -1119,7 +1428,10 @@ export default function Home() {
                 index={index}
                 isActive={isActive}
                 dragIndex={dragIndex}
+                effectiveIndent={effectiveIndent}
                 indentWidth={INDENT_WIDTH}
+                activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
+                onTagClick={handleTagSearchClick}
                 rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
                 onFocusRow={() => setActiveTaskId(task.id)}
                 onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
