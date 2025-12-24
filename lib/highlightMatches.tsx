@@ -10,7 +10,7 @@ export const highlightMatches = (text: string, query: string) => {
     regex.test(part) ? (
       <mark
         key={i}
-        className="bg-yellow-200/40 dark:bg-yellow-400/20 rounded px-0.5"
+        className="bg-primary/10 rounded px-0.5"
       >
         {part}
       </mark>

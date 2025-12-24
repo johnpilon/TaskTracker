@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
+import { parseTaskMeta } from '../lib/parseTaskMeta';
 
 /* =======================
    Types
@@ -115,23 +116,7 @@ export default function Home() {
   const createId = () =>
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  const parseTagsFromText = (text: string) => {
-    const tagRegex = /(^|\s)#([a-zA-Z0-9_-]+)/g;
-    const tags = new Set<string>();
-    let cleanedText = text;
-
-    let match;
-    while ((match = tagRegex.exec(text)) !== null) {
-      tags.add(match[2].toLowerCase());
-    }
-
-    cleanedText = text.replace(tagRegex, '').replace(/\s{2,}/g, ' ').trim();
-
-    return {
-      text: cleanedText,
-      tags: Array.from(tags),
-    };
-  };
+  const computeTags = (text: string) => parseTaskMeta(text).tags;
 
   const getCaretOffsetFromPoint = (
     container: HTMLElement,
@@ -206,7 +191,7 @@ export default function Home() {
     el.setSelectionRange(pos, pos);
 
     caretInitializedRef.current = true;
-  }, [editingId]);
+  }, [editingId, caretPos]);
 
   useEffect(() => {
     const el = editInputRef.current;
@@ -468,7 +453,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [undoAction, tasks, activeTaskId, editingId]);
+  }, [undoAction, tasks, activeTaskId, editingId, setTasks]);
 
   /* =======================
      Task Actions
@@ -477,7 +462,8 @@ export default function Home() {
   const addTask = () => {
     if (!input.trim()) return;
 
-    const { text, tags } = parseTagsFromText(input.trim());
+    const text = input.trim();
+    const tags = computeTags(text);
 
     setTasks(prev => [
       {
@@ -521,8 +507,8 @@ export default function Home() {
     const hasTextChanged = editingText !== task.text;
   
     if (hasTextChanged) {
-      const parsed = parseTagsFromText(editingText);
-      const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
+      const nextText = editingText;
+      const nextTags = computeTags(nextText);
   
       setUndoAction({ type: 'edit', task });
   
@@ -531,7 +517,7 @@ export default function Home() {
           t.id === task.id
             ? {
                 ...t,
-                text: parsed.text,
+                text: nextText,
                 tags: nextTags,
                 meta: { tags: nextTags },
               }
@@ -552,9 +538,8 @@ export default function Home() {
     const before = editingText.slice(0, cursor);
     const after = editingText.slice(cursor);
 
-    const parsedBefore = parseTagsFromText(before);
-    const parsedAfter = parseTagsFromText(after);
-    const leftTags = Array.from(new Set([...(task.tags ?? []), ...parsedBefore.tags]));
+    const leftTags = computeTags(before);
+    const rightTags = computeTags(after);
 
     // Undo should restore the original row and caret position, and remove the created row.
     setUndoAction({
@@ -574,18 +559,18 @@ export default function Home() {
 
       next[safeIndex] = {
         ...current,
-        text: parsedBefore.text,
+        text: before,
         tags: leftTags,
         meta: { tags: leftTags },
       };
       const newTask: Task = {
         id: createdId,
-        text: parsedAfter.text,
+        text: after,
         createdAt,
         completed: false,
         indent: current.indent,
-        tags: parsedAfter.tags,
-        meta: { tags: parsedAfter.tags },
+        tags: rightTags,
+        meta: { tags: rightTags },
       };
       next.splice(safeIndex + 1, 0, newTask);
       return next;
@@ -593,7 +578,7 @@ export default function Home() {
 
     setActiveTaskId(createdId);
     setEditingId(createdId);
-    setEditingText(parsedAfter.text);
+    setEditingText(after);
     setCaretPos(0);
     caretInitializedRef.current = false;
   };
@@ -615,10 +600,7 @@ export default function Home() {
 
       const prev = tasks[index - 1];
       const merged = prev.text + editingText;
-      const parsed = parseTagsFromText(merged);
-      const mergedTags = Array.from(
-        new Set([...(prev.tags ?? []), ...(task.tags ?? []), ...parsed.tags])
-      );
+      const mergedTags = computeTags(merged);
 
       setUndoAction({
         type: 'merge',
@@ -632,7 +614,7 @@ export default function Home() {
         const next = [...prevTasks];
         next[index - 1] = {
           ...prev,
-          text: parsed.text,
+          text: merged,
           tags: mergedTags,
           meta: { tags: mergedTags },
         };
@@ -641,7 +623,7 @@ export default function Home() {
       });
 
       setEditingId(prev.id);
-      setEditingText(parsed.text);
+      setEditingText(merged);
       setCaretPos(prev.text.length);
       caretInitializedRef.current = false;
       return;
@@ -657,12 +639,12 @@ export default function Home() {
       // Commit this row text before switching
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const parsed = parseTagsFromText(editingText);
-        const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
+        const nextText = editingText;
+        const nextTags = computeTags(nextText);
         setTasks(prev =>
           prev.map(t =>
             t.id === task.id
-              ? { ...t, text: parsed.text, tags: nextTags, meta: { tags: nextTags } }
+              ? { ...t, text: nextText, tags: nextTags, meta: { tags: nextTags } }
               : t
           )
         );
@@ -687,12 +669,12 @@ export default function Home() {
 
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const parsed = parseTagsFromText(editingText);
-        const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
+        const nextText = editingText;
+        const nextTags = computeTags(nextText);
         setTasks(prev =>
           prev.map(t =>
             t.id === task.id
-              ? { ...t, text: parsed.text, tags: nextTags, meta: { tags: nextTags } }
+              ? { ...t, text: nextText, tags: nextTags, meta: { tags: nextTags } }
               : t
           )
         );
@@ -714,10 +696,7 @@ export default function Home() {
 
       const nextTask = tasks[index + 1];
       const merged = editingText + nextTask.text;
-      const parsed = parseTagsFromText(merged);
-      const mergedTags = Array.from(
-        new Set([...(task.tags ?? []), ...(nextTask.tags ?? []), ...parsed.tags])
-      );
+      const mergedTags = computeTags(merged);
 
       setUndoAction({
         type: 'merge',
@@ -731,7 +710,7 @@ export default function Home() {
         const next = [...prevTasks];
         next[index] = {
           ...task,
-          text: parsed.text,
+          text: merged,
           tags: mergedTags,
           meta: { tags: mergedTags },
         };
@@ -739,7 +718,7 @@ export default function Home() {
         return next;
       });
 
-      setEditingText(parsed.text);
+      setEditingText(merged);
       setCaretPos(editingText.length);
       return;
     }
@@ -970,10 +949,29 @@ export default function Home() {
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
+  const matchesSearch = (task: Task) => {
+    if (normalizedQuery.length === 0) return true;
+
+    const text = task.text.toLowerCase();
+    const tags = task.tags ?? [];
+
+    if (normalizedQuery.startsWith('#')) {
+      const needle = normalizedQuery.slice(1);
+      if (needle.length === 0) return true;
+      return tags.some(t => t.toLowerCase().includes(needle));
+    }
+
+    const needle = normalizedQuery;
+    return (
+      text.includes(needle) ||
+      tags.some(t => t.toLowerCase().includes(needle))
+    );
+  };
+
   const visibleTasks =
     normalizedQuery.length === 0
       ? tasks
-      : tasks.filter(task => task.text.toLowerCase().includes(normalizedQuery));
+      : tasks.filter(matchesSearch);
 
   // Keep original indices so drag/undo/navigation that depend on task order stay correct
   // even when we render a filtered subset.
@@ -982,9 +980,7 @@ export default function Home() {
       ? tasks.map((task, index) => ({ task, index }))
       : tasks
           .map((task, index) => ({ task, index }))
-          .filter(({ task }) =>
-            task.text.toLowerCase().includes(normalizedQuery)
-          );
+          .filter(({ task }) => matchesSearch(task));
 
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
