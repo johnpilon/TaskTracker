@@ -69,9 +69,24 @@ A task is a plain object persisted to localStorage:
 - **createdAt**: ISO timestamp string
 - **completed**: boolean
 - **indent**: number (0..MAX_INDENT)
+- **tags**: string[] (derived from `#tags` found in text; stored normalized)
+- **meta** (optional): currently `{ tags: string[] }` for backward compatibility
 
 ### Persistence key
-- Tasks are stored under **localStorage key**: `tasks` (JSON array).
+- Primary storage is **localStorage key**: `tasks`
+- Backup storage is **localStorage key**: `tasks_backup`
+- Stored format is a payload object:
+  - `{ version: 1, tasks: Task[] }`
+- Load path is:
+  - validate + dedupe tasks from `tasks`
+  - fallback to `tasks_backup` if `tasks` is missing/corrupt
+
+### Tags and “metadata”
+- Tags are extracted from task text via the `#tag` pattern (letters/numbers/underscore/hyphen).
+- Tag extraction:
+  - collected into `task.tags` (lowercased, de-duped)
+  - also mirrored into `task.meta.tags` (optional) for compatibility
+  - stripped from `task.text` for the stored/display text (the `#tag` tokens are removed and whitespace is normalized)
 
 ### Meaning of indent
 - Visual hierarchy only (currently).
@@ -100,6 +115,13 @@ Theme state is owned by the layout layer:
 - **System preference**: `prefers-color-scheme`
 - **Optional override**: localStorage `theme` = `"light" | "dark"` (absence implies "system")
 - The **dark class** is applied to `<html>`
+
+UI state is partially persisted:
+- localStorage key: `task_ui_state`
+- stores last known:
+  - `activeTaskId`
+  - `editingTaskId`
+  - `caret`
 
 ### What components are stateless
 - Presentational helpers like the drag handle are stateless.
@@ -147,8 +169,12 @@ Theme state is owned by the layout layer:
   - writes/removes `localStorage.theme`
 
 ### hooks (if any)
-None currently. Potential future hooks:
-- `useLocalStorageTasks()`
+Implemented:
+- `usePersistentTasks()`:
+  - validates + dedupes loaded tasks
+  - writes `{ version: 1, tasks }` to `tasks_backup` then `tasks`
+
+Potential future hooks:
 - `useUndo()`
 - `useRovingFocus()`
 - `useDragReorderIndent()`
@@ -198,6 +224,8 @@ None currently. Potential future hooks:
 - **LocalStorage corruption**: duplicate IDs can break reconciliation; may require dedupe-on-load.
 - **Multiple input modalities**: mouse + keyboard + pointer drag require strict precedence rules.
 - **Dev cache issues**: deleting `.next` may be required after crashes.
+- **Search vs tags mismatch**: the UI advertises “Search tasks or #tags”, but the current filter only checks `task.text` (tags are stored separately).
+- **Theme token purity**: most UI uses token classes, but `highlightMatches` currently includes a Tailwind `dark:` variant for `<mark>` styling.
 
 ### Suspected wrong / risky
 - Undo is single-step; complex sessions can feel inconsistent.

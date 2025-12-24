@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 
@@ -14,6 +15,12 @@ export interface Task {
   createdAt: string;
   completed: boolean;
   indent: number;
+  tags: string[];
+  meta?: TaskMeta; // optional for backward compatibility
+}
+
+export interface TaskMeta {
+  tags: string[];
 }
 
 type UndoAction =
@@ -46,6 +53,7 @@ const UI_STATE_KEY = 'task_ui_state';
 export default function Home() {
   const [tasks, setTasks] = usePersistentTasks();
   const [input, setInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -66,6 +74,7 @@ export default function Home() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const pendingFocusRef = useRef<
     | { taskId: string; mode: 'row' | 'edit'; caret?: number }
@@ -105,6 +114,24 @@ export default function Home() {
 
   const createId = () =>
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const parseTagsFromText = (text: string) => {
+    const tagRegex = /(^|\s)#([a-zA-Z0-9_-]+)/g;
+    const tags = new Set<string>();
+    let cleanedText = text;
+
+    let match;
+    while ((match = tagRegex.exec(text)) !== null) {
+      tags.add(match[2].toLowerCase());
+    }
+
+    cleanedText = text.replace(tagRegex, '').replace(/\s{2,}/g, ' ').trim();
+
+    return {
+      text: cleanedText,
+      tags: Array.from(tags),
+    };
+  };
 
   const getCaretOffsetFromPoint = (
     container: HTMLElement,
@@ -296,6 +323,21 @@ export default function Home() {
     }
   }, [activeTaskId, editingId, caretPos]);
 
+  useEffect(() => {
+    if (!searchQuery) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSearchQuery('');
+        searchInputRef.current?.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [searchQuery]);
+
   /* =======================
      Undo
   ======================= */
@@ -435,13 +477,17 @@ export default function Home() {
   const addTask = () => {
     if (!input.trim()) return;
 
+    const { text, tags } = parseTagsFromText(input.trim());
+
     setTasks(prev => [
       {
         id: Date.now().toString(),
-        text: input.trim(),
+        text,
         createdAt: new Date().toISOString(),
         completed: false,
         indent: 0,
+        tags,
+        meta: { tags },
       },
       ...prev,
     ]);
@@ -472,19 +518,31 @@ export default function Home() {
   };
 
   const saveEdit = (task: Task) => {
-    if (editingText !== task.text) {
+    const hasTextChanged = editingText !== task.text;
+  
+    if (hasTextChanged) {
+      const parsed = parseTagsFromText(editingText);
+      const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
+  
       setUndoAction({ type: 'edit', task });
+  
       setTasks(prev =>
         prev.map(t =>
-          t.id === task.id ? { ...t, text: editingText } : t
+          t.id === task.id
+            ? {
+                ...t,
+                text: parsed.text,
+                tags: nextTags,
+                meta: { tags: nextTags },
+              }
+            : t
         )
       );
     }
+  
     setEditingId(null);
     setEditingText('');
     setCaretPos(null);
-    editingOriginalRef.current = null;
-    caretInitializedRef.current = false;
   };
 
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
@@ -493,6 +551,10 @@ export default function Home() {
 
     const before = editingText.slice(0, cursor);
     const after = editingText.slice(cursor);
+
+    const parsedBefore = parseTagsFromText(before);
+    const parsedAfter = parseTagsFromText(after);
+    const leftTags = Array.from(new Set([...(task.tags ?? []), ...parsedBefore.tags]));
 
     // Undo should restore the original row and caret position, and remove the created row.
     setUndoAction({
@@ -510,13 +572,20 @@ export default function Home() {
       const current = next[safeIndex];
       if (!current) return prev;
 
-      next[safeIndex] = { ...current, text: before };
+      next[safeIndex] = {
+        ...current,
+        text: parsedBefore.text,
+        tags: leftTags,
+        meta: { tags: leftTags },
+      };
       const newTask: Task = {
         id: createdId,
-        text: after,
+        text: parsedAfter.text,
         createdAt,
         completed: false,
         indent: current.indent,
+        tags: parsedAfter.tags,
+        meta: { tags: parsedAfter.tags },
       };
       next.splice(safeIndex + 1, 0, newTask);
       return next;
@@ -524,7 +593,7 @@ export default function Home() {
 
     setActiveTaskId(createdId);
     setEditingId(createdId);
-    setEditingText(after);
+    setEditingText(parsedAfter.text);
     setCaretPos(0);
     caretInitializedRef.current = false;
   };
@@ -546,6 +615,10 @@ export default function Home() {
 
       const prev = tasks[index - 1];
       const merged = prev.text + editingText;
+      const parsed = parseTagsFromText(merged);
+      const mergedTags = Array.from(
+        new Set([...(prev.tags ?? []), ...(task.tags ?? []), ...parsed.tags])
+      );
 
       setUndoAction({
         type: 'merge',
@@ -557,13 +630,18 @@ export default function Home() {
 
       setTasks(prevTasks => {
         const next = [...prevTasks];
-        next[index - 1] = { ...prev, text: merged };
+        next[index - 1] = {
+          ...prev,
+          text: parsed.text,
+          tags: mergedTags,
+          meta: { tags: mergedTags },
+        };
         next.splice(index, 1);
         return next;
       });
 
       setEditingId(prev.id);
-      setEditingText(merged);
+      setEditingText(parsed.text);
       setCaretPos(prev.text.length);
       caretInitializedRef.current = false;
       return;
@@ -579,8 +657,14 @@ export default function Home() {
       // Commit this row text before switching
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
+        const parsed = parseTagsFromText(editingText);
+        const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
         setTasks(prev =>
-          prev.map(t => (t.id === task.id ? { ...t, text: editingText } : t))
+          prev.map(t =>
+            t.id === task.id
+              ? { ...t, text: parsed.text, tags: nextTags, meta: { tags: nextTags } }
+              : t
+          )
         );
       }
 
@@ -603,8 +687,14 @@ export default function Home() {
 
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
+        const parsed = parseTagsFromText(editingText);
+        const nextTags = Array.from(new Set([...(task.tags ?? []), ...parsed.tags]));
         setTasks(prev =>
-          prev.map(t => (t.id === task.id ? { ...t, text: editingText } : t))
+          prev.map(t =>
+            t.id === task.id
+              ? { ...t, text: parsed.text, tags: nextTags, meta: { tags: nextTags } }
+              : t
+          )
         );
       }
 
@@ -624,6 +714,10 @@ export default function Home() {
 
       const nextTask = tasks[index + 1];
       const merged = editingText + nextTask.text;
+      const parsed = parseTagsFromText(merged);
+      const mergedTags = Array.from(
+        new Set([...(task.tags ?? []), ...(nextTask.tags ?? []), ...parsed.tags])
+      );
 
       setUndoAction({
         type: 'merge',
@@ -635,12 +729,17 @@ export default function Home() {
 
       setTasks(prevTasks => {
         const next = [...prevTasks];
-        next[index] = { ...task, text: merged };
+        next[index] = {
+          ...task,
+          text: parsed.text,
+          tags: mergedTags,
+          meta: { tags: mergedTags },
+        };
         next.splice(index + 1, 1);
         return next;
       });
 
-      setEditingText(merged);
+      setEditingText(parsed.text);
       setCaretPos(editingText.length);
       return;
     }
@@ -655,6 +754,10 @@ export default function Home() {
     }
 
     if (e.key === 'Tab') {
+      if (normalizedQuery.length > 0) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       setUndoAction({ type: 'indent', task });
       setTasks(prev =>
@@ -710,6 +813,10 @@ export default function Home() {
     // Tab / Shift+Tab indents/outdents the selected row anywhere within it.
     // (When editing, the textarea has its own Tab handler.)
     if (e.key === 'Tab') {
+      if (normalizedQuery.length > 0) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
 
       if (activeTaskId !== task.id) setActiveTaskId(task.id);
@@ -761,6 +868,10 @@ export default function Home() {
   ======================= */
 
   const handlePointerDown = (index: number, e: React.PointerEvent) => {
+    if (normalizedQuery.length > 0) {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
 
@@ -857,9 +968,28 @@ export default function Home() {
      Render
   ======================= */
 
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  const visibleTasks =
+    normalizedQuery.length === 0
+      ? tasks
+      : tasks.filter(task => task.text.toLowerCase().includes(normalizedQuery));
+
+  // Keep original indices so drag/undo/navigation that depend on task order stay correct
+  // even when we render a filtered subset.
+  const visibleTaskEntries =
+    normalizedQuery.length === 0
+      ? tasks.map((task, index) => ({ task, index }))
+      : tasks
+          .map((task, index) => ({ task, index }))
+          .filter(({ task }) =>
+            task.text.toLowerCase().includes(normalizedQuery)
+          );
+
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
       <div className="max-w-3xl mx-auto">
+        {/* Primary capture input */}
         <input
           ref={inputRef}
           value={input}
@@ -869,10 +999,59 @@ export default function Home() {
           className="w-full bg-card border border-border rounded-lg px-6 py-4 text-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
 
+        {/* 🔍 Search input */}
+        <div className="relative mt-4">
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }
+            }}
+            placeholder="Search tasks or #tags"
+            className="w-full bg-card border border-border rounded-lg px-5 py-3 pr-12 text-base
+                       text-foreground placeholder:text-muted-foreground
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+
+          {searchQuery && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2
+                         inline-flex h-9 w-9 items-center justify-center rounded-full
+                         border-[3px] border-muted-foreground/70 bg-muted/40 shadow-sm
+                         text-muted-foreground transition-colors
+                         hover:text-foreground hover:bg-foreground/10 hover:border-muted-foreground/85
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="text-xl leading-none font-semibold" aria-hidden>
+                ×
+              </span>
+            </button>
+          )}
+        </div>
+
+        {/* Optional indicator */}
+        {normalizedQuery.length > 0 && (
+          <div className="mt-2 text-sm text-muted-foreground">
+            Showing {visibleTasks.length} of {tasks.length} tasks
+          </div>
+        )}
+
         <div className="mt-8 space-y-2" role="list" ref={listRef}>
-          {tasks.map((task, index) => {
+          {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
             const isActive =
-              activeTaskId === task.id || (activeTaskId === null && index === 0);
+              activeTaskId === task.id ||
+              (activeTaskId === null && visibleIndex === 0);
 
             return (
               <TaskRow
@@ -882,42 +1061,54 @@ export default function Home() {
                 isActive={isActive}
                 dragIndex={dragIndex}
                 indentWidth={INDENT_WIDTH}
-                rowRef={el => (rowRefs.current[index] = el)}
+                rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
                 onFocusRow={() => setActiveTaskId(task.id)}
-                onMouseDownRow={e => {
+                onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
                   const t = e.target as HTMLElement | null;
                   if (t?.closest('input,textarea,button')) return;
                   setActiveTaskId(task.id);
                 }}
-                onKeyDownCapture={e => handleRowKeyDownCapture(e, index, task)}
-                onPointerDown={e => handlePointerDown(index, e)}
+                onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
+                  handleRowKeyDownCapture(e, index, task)}
+                onPointerDown={(e: React.PointerEvent<HTMLDivElement>) =>
+                  handlePointerDown(index, e)}
                 onToggle={() => toggleTask(task)}
                 isEditing={editingId === task.id}
                 editingText={editingId === task.id ? editingText : task.text}
                 editInputRef={editingId === task.id ? editInputRef : undefined}
-                onChangeEditingText={value => {
+                onChangeEditingText={(value: string) => {
                   setEditingText(value);
 
                   if (
                     !editingOriginalRef.current ||
                     editingOriginalRef.current.taskId !== task.id
                   ) {
-                    editingOriginalRef.current = { taskId: task.id, snapshot: task };
+                    editingOriginalRef.current = {
+                      taskId: task.id,
+                      snapshot: task,
+                    };
                     setUndoAction({ type: 'edit', task });
                   }
 
                   setTasks(prev =>
-                    prev.map(t => (t.id === task.id ? { ...t, text: value } : t))
+                    prev.map(t =>
+                      t.id === task.id ? { ...t, text: value } : t
+                    )
                   );
                 }}
-                onTextareaKeyDown={e => handleTextareaKeyDown(e, index, task)}
+                onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
+                  handleTextareaKeyDown(e, index, task)}
                 onTextareaBlur={() => saveEdit(task)}
-                onTextClick={e => {
+                onTextClick={(e: React.MouseEvent<HTMLDivElement>) => {
                   const el = e.currentTarget;
                   const caret = getCaretOffsetFromPoint(el, e.clientX, e.clientY);
                   setActiveTaskId(task.id);
-                  startEditing(task, Math.min(task.text.length, caret ?? task.text.length));
+                  startEditing(
+                    task,
+                    Math.min(task.text.length, caret ?? task.text.length)
+                  );
                 }}
+                searchQuery={normalizedQuery}
                 onDelete={() => deleteTask(task, index)}
               />
             );

@@ -20,7 +20,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const normalizeTask = (value: unknown): Task | null => {
   if (!isPlainObject(value)) return null;
 
-  const { id, text, completed, indent, createdAt } = value;
+  const { id, text, completed, indent, createdAt, tags, meta } = value;
 
   if (typeof id !== 'string' || typeof text !== 'string') return null;
 
@@ -31,19 +31,33 @@ const normalizeTask = (value: unknown): Task | null => {
   const safeCreatedAt =
     typeof createdAt === 'string' ? createdAt : new Date().toISOString();
 
+  const safeTags =
+    Array.isArray(tags) && tags.every(t => typeof t === 'string') ? tags : [];
+
+  let safeMeta: Task['meta'] | undefined;
+  if (isPlainObject(meta)) {
+    const maybeTags = (meta as { tags?: unknown }).tags;
+    if (Array.isArray(maybeTags) && maybeTags.every(t => typeof t === 'string')) {
+      safeMeta = { tags: maybeTags };
+    }
+  }
+
   return {
     id,
     text,
     completed: safeCompleted,
     indent: safeIndent,
     createdAt: safeCreatedAt,
+    tags: safeTags,
+    ...(safeMeta ? { meta: safeMeta } : {}),
   };
 };
 
 const extractTasksArray = (value: unknown): unknown[] | null => {
   if (Array.isArray(value)) return value;
-  if (isPlainObject(value) && Array.isArray((value as StoredPayload).tasks)) {
-    return (value as StoredPayload).tasks;
+  if (isPlainObject(value)) {
+    const maybeTasks = (value as { tasks?: unknown }).tasks;
+    if (Array.isArray(maybeTasks)) return maybeTasks;
   }
   return null;
 };

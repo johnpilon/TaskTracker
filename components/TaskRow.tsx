@@ -3,6 +3,7 @@
 import React, { useLayoutEffect } from 'react';
 import { cn } from '@/lib/utils';
 import type { Task } from '../app/page';
+import { highlightMatches } from '../lib/highlightMatches';
 
 interface TaskRowProps {
   task: Task;
@@ -10,20 +11,23 @@ interface TaskRowProps {
   isActive: boolean;
   dragIndex: number | null;
   indentWidth: number;
-  rowRef: (el: HTMLDivElement | null) => void;
-  onFocusRow: () => void;
-  onMouseDownRow: (e: React.MouseEvent<HTMLDivElement>) => void;
-  onKeyDownCapture: (e: React.KeyboardEvent<HTMLDivElement>) => void;
-  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
-  onToggle: () => void;
+  // NOTE: These are runtime-only callbacks/refs coming from the parent client component.
+  // We intentionally type-erase them to satisfy Next.js "client boundary" serializable-props checks.
+  rowRef: unknown;
+  onFocusRow: unknown;
+  onMouseDownRow: unknown;
+  onKeyDownCapture: unknown;
+  onPointerDown: unknown;
+  onToggle: unknown;
   isEditing: boolean;
   editingText: string;
-  editInputRef?: React.RefObject<HTMLTextAreaElement>;
-  onChangeEditingText: (value: string) => void;
-  onTextareaKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onTextareaBlur: () => void;
-  onTextClick: (e: React.MouseEvent<HTMLDivElement>) => void;
-  onDelete: () => void;
+  editInputRef?: unknown;
+  onChangeEditingText: unknown;
+  onTextareaKeyDown: unknown;
+  onTextareaBlur: unknown;
+  onTextClick: unknown;
+  searchQuery: string;
+  onDelete: unknown;
 }
 
 const DragHandle = ({
@@ -66,6 +70,7 @@ export default function TaskRow({
   onTextareaKeyDown,
   onTextareaBlur,
   onTextClick,
+  searchQuery,
   onDelete,
 }: TaskRowProps) {
   const completedClass = task.completed
@@ -73,13 +78,13 @@ export default function TaskRow({
     : '';
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    onChangeEditingText(e.target.value);
+    (onChangeEditingText as any)(e.target.value);
     e.currentTarget.style.height = 'auto';
     e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
   };
 
   useLayoutEffect(() => {
-    const el = editInputRef?.current;
+    const el = (editInputRef as any)?.current as HTMLTextAreaElement | null | undefined;
     if (!isEditing || !el) return;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
@@ -87,12 +92,12 @@ export default function TaskRow({
 
   return (
     <div
-      ref={rowRef}
+      ref={rowRef as any}
       role="listitem"
       tabIndex={isActive ? 0 : -1}
-      onFocus={onFocusRow}
-      onMouseDown={onMouseDownRow}
-      onKeyDownCapture={onKeyDownCapture}
+      onFocus={onFocusRow as any}
+      onMouseDown={onMouseDownRow as any}
+      onKeyDownCapture={onKeyDownCapture as any}
       className={`group relative flex items-start gap-3 rounded-lg px-4 py-3 bg-card focus:outline-none
         outline outline-1 outline-border
       `}
@@ -118,25 +123,25 @@ export default function TaskRow({
         ))}
       </div>
 
-      <DragHandle onPointerDown={onPointerDown} />
+      <DragHandle onPointerDown={onPointerDown as any} />
 
       <input
         type="checkbox"
         checked={task.completed}
-        onChange={onToggle}
+        onChange={onToggle as any}
         className="h-5 w-5 accent-muted-foreground self-start mt-[2px]"
       />
 
       <div className="flex-1 min-w-0 grid">
         <textarea
-          ref={editInputRef}
+          ref={editInputRef as any}
           value={isEditing ? editingText : ''}
           readOnly={!isEditing}
           tabIndex={isEditing ? 0 : -1}
           rows={1}
           onChange={isEditing ? handleChange : undefined}
-          onKeyDown={isEditing ? onTextareaKeyDown : undefined}
-          onBlur={isEditing ? onTextareaBlur : undefined}
+          onKeyDown={isEditing ? (onTextareaKeyDown as any) : undefined}
+          onBlur={isEditing ? (onTextareaBlur as any) : undefined}
           className={cn(
             'col-start-1 row-start-1',
             'w-full resize-none overflow-hidden bg-transparent text-lg p-0 m-0',
@@ -159,7 +164,7 @@ export default function TaskRow({
             onMouseDown={e => {
               e.preventDefault();
               e.stopPropagation();
-              onTextClick(e);
+              (onTextClick as any)(e);
             }}
             className={cn(
               'col-start-1 row-start-1 text-lg cursor-text block w-full',
@@ -168,16 +173,27 @@ export default function TaskRow({
               completedClass
             )}
           >
-            {task.text.length > 0 ? task.text : '\u00A0'}
+            {task.text.length > 0
+              ? searchQuery
+                ? highlightMatches(task.text, searchQuery)
+                : task.text
+              : '\u00A0'}
           </div>
         )}
       </div>
 
       <button
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+        onClick={onDelete as any}
+        aria-label="Delete task"
+        type="button"
+        className="opacity-0 group-hover:opacity-100 text-destructive
+                   inline-flex h-9 w-9 items-center justify-center rounded-full
+                   border-[3px] border-destructive/80 bg-destructive/12 shadow-sm
+                   transition-colors hover:bg-destructive/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        🗑️
+        <span className="text-xl leading-none font-semibold" aria-hidden>
+          ×
+        </span>
       </button>
     </div>
   );
