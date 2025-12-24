@@ -5,6 +5,7 @@ import type React from 'react';
 import type { Task } from '../app/page';
 
 const STORAGE_KEY = 'tasks';
+const BACKUP_STORAGE_KEY = 'tasks_backup'; // NEW
 const STORAGE_VERSION = 1;
 const MAX_INDENT = 2;
 
@@ -21,10 +22,8 @@ const normalizeTask = (value: unknown): Task | null => {
 
   const { id, text, completed, indent, createdAt } = value;
 
-  // Hard requirements: without these we can't safely keep the row.
   if (typeof id !== 'string' || typeof text !== 'string') return null;
 
-  // Soft requirements: gracefully handle corrupted/legacy values.
   const safeCompleted = typeof completed === 'boolean' ? completed : false;
   const indentNumber =
     typeof indent === 'number' && Number.isFinite(indent) ? indent : 0;
@@ -49,33 +48,45 @@ const extractTasksArray = (value: unknown): unknown[] | null => {
   return null;
 };
 
+const parseAndValidate = (raw: string | null): Task[] | null => { // NEW
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const tasksArray = extractTasksArray(parsed);
+  if (!tasksArray) return null;
+
+  const seen = new Set<string>();
+  const validated: Task[] = [];
+
+  for (const candidate of tasksArray) {
+    const task = normalizeTask(candidate);
+    if (!task) continue;
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    validated.push(task);
+  }
+
+  return validated;
+};
+
 const loadTasks = (): Task[] => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+    // 1. Try primary storage
+    const primary = parseAndValidate(localStorage.getItem(STORAGE_KEY));
+    if (primary) return primary;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return [];
-    }
+    // 2. Fallback to last-known-good backup
+    const backup = parseAndValidate(localStorage.getItem(BACKUP_STORAGE_KEY)); // NEW
+    if (backup) return backup;
 
-    const tasksArray = extractTasksArray(parsed);
-    if (!tasksArray) return [];
-
-    const seen = new Set<string>();
-    const validated: Task[] = [];
-
-    for (const candidate of tasksArray) {
-      const task = normalizeTask(candidate);
-      if (!task) continue;
-      if (seen.has(task.id)) continue;
-      seen.add(task.id);
-      validated.push(task);
-    }
-
-    return validated;
+    // 3. Give up safely
+    return [];
   } catch {
     return [];
   }
@@ -96,10 +107,6 @@ export default function usePersistentTasks(): [
   }, []);
 
   useEffect(() => {
-    // StrictMode-safe init guard:
-    // - Don't save on the initial render (tasks === [])
-    // - Don't save on the first render *after* loading (tasks === loadedTasksRef.current)
-    // This prevents overwriting valid stored tasks with [] during startup.
     if (!initializedRef.current) {
       if (loadedTasksRef.current && tasks === loadedTasksRef.current) {
         initializedRef.current = true;
@@ -109,7 +116,11 @@ export default function usePersistentTasks(): [
 
     try {
       const payload: StoredPayload = { version: STORAGE_VERSION, tasks };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      const serialized = JSON.stringify(payload);
+
+      // Write backup first, then primary (important ordering)
+      localStorage.setItem(BACKUP_STORAGE_KEY, serialized); // NEW
+      localStorage.setItem(STORAGE_KEY, serialized);
     } catch {
       // Ignore persistence failures
     }
@@ -117,4 +128,3 @@ export default function usePersistentTasks(): [
 
   return [tasks, setTasks];
 }
-

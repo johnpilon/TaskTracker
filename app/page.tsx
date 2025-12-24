@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 
@@ -37,6 +37,7 @@ type UndoAction =
 
 const MAX_INDENT = 2;
 const INDENT_WIDTH = 28;
+const UI_STATE_KEY = 'task_ui_state';
 
 /* =======================
    Page
@@ -51,6 +52,7 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [caretPos, setCaretPos] = useState<number | null>(null);
+  const caretInitializedRef = useRef(false);
 
   const [undoAction, setUndoAction] = useState<UndoAction>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -69,6 +71,37 @@ export default function Home() {
     | { taskId: string; mode: 'row' | 'edit'; caret?: number }
     | null
   >(null);
+  const uiRestoredRef = useRef(false);
+  const restoringUIRef = useRef(false);
+  const initialUIStateRef = useRef<
+    | {
+        activeTaskId?: string;
+        editingTaskId?: string;
+        caret?: number;
+      }
+    | null
+  >(null);
+  const editingOriginalRef = useRef<{ taskId: string; snapshot: Task } | null>(null);
+
+  if (typeof window !== 'undefined' && initialUIStateRef.current === null) {
+    try {
+      const raw = localStorage.getItem(UI_STATE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          initialUIStateRef.current = parsed;
+          if (
+            (parsed as { activeTaskId?: unknown }).activeTaskId ||
+            (parsed as { editingTaskId?: unknown }).editingTaskId
+          ) {
+            restoringUIRef.current = true;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   const createId = () =>
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -125,21 +158,49 @@ export default function Home() {
   ======================= */
 
   useEffect(() => {
+    if (restoringUIRef.current) return;
     inputRef.current?.focus();
   }, []);
 
+  useLayoutEffect(() => {
+    if (!editingId) return;
+    if (caretInitializedRef.current) return;
+
+    const el = editInputRef.current;
+    if (!el) return;
+
+    el.focus();
+
+    const pos =
+      typeof caretPos === 'number'
+        ? caretPos
+        : el.value.length;
+
+    el.setSelectionRange(pos, pos);
+
+    caretInitializedRef.current = true;
+  }, [editingId]);
+
   useEffect(() => {
-    if (editingId && editInputRef.current) {
-      const el = editInputRef.current;
-      el.focus();
+    const el = editInputRef.current;
+    if (!editingId || !el) return;
 
-      const pos = caretPos ?? el.value.length;
-      el.setSelectionRange(pos, pos);
+    const updateCaret = () => {
+      const pos = el.selectionStart ?? null;
+      if (pos === null || Number.isNaN(pos)) return;
+      setCaretPos(pos);
+    };
 
-      el.style.height = 'auto';
-      el.style.height = `${el.scrollHeight}px`;
-    }
-  }, [editingId, caretPos]);
+    el.addEventListener('select', updateCaret);
+    el.addEventListener('keyup', updateCaret);
+    el.addEventListener('mouseup', updateCaret);
+
+    return () => {
+      el.removeEventListener('select', updateCaret);
+      el.removeEventListener('keyup', updateCaret);
+      el.removeEventListener('mouseup', updateCaret);
+    };
+  }, [editingId]);
 
   useEffect(() => {
     if (tasks.length === 0) {
@@ -151,6 +212,49 @@ export default function Home() {
       setActiveTaskId(tasks[0].id);
     }
   }, [tasks, activeTaskId]);
+
+  useEffect(() => {
+    if (uiRestoredRef.current) return;
+    if (tasks.length === 0) return;
+
+    uiRestoredRef.current = true;
+
+    try {
+      const raw =
+        initialUIStateRef.current ?? JSON.parse(localStorage.getItem(UI_STATE_KEY) ?? 'null');
+      if (!raw) return;
+      const parsed = raw;
+      if (!parsed || typeof parsed !== 'object') return;
+
+      const storedActive = (parsed as { activeTaskId?: unknown }).activeTaskId;
+      const storedEditing = (parsed as { editingTaskId?: unknown }).editingTaskId;
+      const storedCaret = (parsed as { caret?: unknown }).caret;
+
+      const hasActive =
+        typeof storedActive === 'string' && tasks.some(t => t.id === storedActive);
+      const hasEditing =
+        typeof storedEditing === 'string' &&
+        tasks.some(t => t.id === storedEditing);
+
+      if (hasActive) setActiveTaskId(storedActive as string);
+
+      if (hasEditing) {
+        const task = tasks.find(t => t.id === storedEditing) ?? null;
+        if (task) {
+          setEditingId(task.id);
+          setEditingText(task.text);
+          caretInitializedRef.current = false;
+          if (typeof storedCaret === 'number' && Number.isFinite(storedCaret)) {
+            setCaretPos(Math.max(0, Math.min(task.text.length, storedCaret)));
+          }
+        }
+      }
+    } catch {
+      // Fail silently
+    }
+
+    restoringUIRef.current = false;
+  }, [tasks]);
 
   useEffect(() => {
     const pending = pendingFocusRef.current;
@@ -166,6 +270,7 @@ export default function Home() {
       setEditingId(nextTask.id);
       setEditingText(nextTask.text);
       setCaretPos(pending.caret ?? nextTask.text.length);
+      caretInitializedRef.current = false;
     }
 
     requestAnimationFrame(() => {
@@ -175,6 +280,21 @@ export default function Home() {
       pendingFocusRef.current = null;
     });
   }, [tasks]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        UI_STATE_KEY,
+        JSON.stringify({
+          activeTaskId,
+          editingTaskId: editingId,
+          caret: caretPos,
+        })
+      );
+    } catch {
+      // Ignore persistence errors for UI state
+    }
+  }, [activeTaskId, editingId, caretPos]);
 
   /* =======================
      Undo
@@ -347,7 +467,8 @@ export default function Home() {
   const startEditing = (task: Task, caret: number) => {
     setEditingId(task.id);
     setEditingText(task.text);
-    setCaretPos(caret);
+    setCaretPos(caret ?? task.text.length ?? 0);
+    caretInitializedRef.current = false;
   };
 
   const saveEdit = (task: Task) => {
@@ -362,6 +483,8 @@ export default function Home() {
     setEditingId(null);
     setEditingText('');
     setCaretPos(null);
+    editingOriginalRef.current = null;
+    caretInitializedRef.current = false;
   };
 
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
@@ -403,6 +526,7 @@ export default function Home() {
     setEditingId(createdId);
     setEditingText(after);
     setCaretPos(0);
+    caretInitializedRef.current = false;
   };
 
   const handleTextareaKeyDown = (
@@ -441,6 +565,7 @@ export default function Home() {
       setEditingId(prev.id);
       setEditingText(merged);
       setCaretPos(prev.text.length);
+      caretInitializedRef.current = false;
       return;
     }
 
@@ -464,6 +589,7 @@ export default function Home() {
       setEditingId(prevTask.id);
       setEditingText(prevTask.text);
       setCaretPos(prevTask.text.length);
+      caretInitializedRef.current = false;
       return;
     }
 
@@ -487,6 +613,7 @@ export default function Home() {
       setEditingId(nextTask.id);
       setEditingText(nextTask.text);
       setCaretPos(nextTask.text.length);
+      caretInitializedRef.current = false;
       return;
     }
 
@@ -761,24 +888,35 @@ export default function Home() {
                   const t = e.target as HTMLElement | null;
                   if (t?.closest('input,textarea,button')) return;
                   setActiveTaskId(task.id);
-                  requestAnimationFrame(() => rowRefs.current[index]?.focus());
                 }}
                 onKeyDownCapture={e => handleRowKeyDownCapture(e, index, task)}
                 onPointerDown={e => handlePointerDown(index, e)}
                 onToggle={() => toggleTask(task)}
                 isEditing={editingId === task.id}
-                editingText={editingText}
-                editInputRef={editInputRef}
-                onChangeEditingText={value => setEditingText(value)}
+                editingText={editingId === task.id ? editingText : task.text}
+                editInputRef={editingId === task.id ? editInputRef : undefined}
+                onChangeEditingText={value => {
+                  setEditingText(value);
+
+                  if (
+                    !editingOriginalRef.current ||
+                    editingOriginalRef.current.taskId !== task.id
+                  ) {
+                    editingOriginalRef.current = { taskId: task.id, snapshot: task };
+                    setUndoAction({ type: 'edit', task });
+                  }
+
+                  setTasks(prev =>
+                    prev.map(t => (t.id === task.id ? { ...t, text: value } : t))
+                  );
+                }}
                 onTextareaKeyDown={e => handleTextareaKeyDown(e, index, task)}
                 onTextareaBlur={() => saveEdit(task)}
                 onTextClick={e => {
                   const el = e.currentTarget;
-                  const caret =
-                    getCaretOffsetFromPoint(el, e.clientX, e.clientY) ??
-                    task.text.length;
+                  const caret = getCaretOffsetFromPoint(el, e.clientX, e.clientY);
                   setActiveTaskId(task.id);
-                  startEditing(task, Math.min(task.text.length, caret));
+                  startEditing(task, Math.min(task.text.length, caret ?? task.text.length));
                 }}
                 onDelete={() => deleteTask(task, index)}
               />
