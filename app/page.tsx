@@ -5,6 +5,7 @@ import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 import { parseTaskMeta } from '../lib/parseTaskMeta';
+import { cn } from '../lib/utils';
 
 /* =======================
    Types
@@ -23,6 +24,8 @@ export interface Task {
 export interface TaskMeta {
   tags: string[];
 }
+
+type ViewState = { type: 'search'; query: string };
 
 type UndoAction =
   | { type: 'delete'; task: Task; index: number }
@@ -117,6 +120,49 @@ export default function Home() {
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const computeTags = (text: string) => parseTaskMeta(text).tags;
+
+  const deriveViewState = (raw: string): ViewState | null => {
+    const query = raw.trim().toLowerCase();
+    if (query.length === 0) return null;
+    return { type: 'search', query };
+  };
+
+  const tokenizeQuery = (query: string): string[] =>
+    query
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const filterTasksBySearch = (task: Task, query: string): boolean => {
+    const tokens = tokenizeQuery(query);
+    if (tokens.length === 0) return true;
+
+    const text = task.text.toLowerCase();
+    const tags = task.tags ?? [];
+
+    const tagTokens = tokens.filter(t => t.startsWith('#'));
+    const textTokens = tokens.filter(t => !t.startsWith('#'));
+
+    const textMatch = textTokens.every(t => text.includes(t));
+    const tagMatch = tagTokens.every(t => {
+      const needle = t.slice(1);
+      if (needle.length === 0) return true;
+      return tags.some(tag => tag.toLowerCase().includes(needle));
+    });
+
+    if (tagTokens.length > 0) {
+      console.log('SEARCH CHECK', {
+        query,
+        taskText: task.text,
+        taskTags: task.tags,
+        textMatch,
+        tagMatch,
+      });
+    }
+
+    return textMatch && tagMatch;
+  };
 
   const getCaretOffsetFromPoint = (
     container: HTMLElement,
@@ -538,13 +584,28 @@ export default function Home() {
     const before = editingText.slice(0, cursor);
     const after = editingText.slice(cursor);
 
-    const leftTags = computeTags(before);
-    const rightTags = computeTags(after);
+    // IMPORTANT: tags must always be derived from text.
+    // Never copy tags between tasks.
+    const leftMeta = parseTaskMeta(before);
+    const rightMeta = parseTaskMeta(after);
+    const originalMeta = parseTaskMeta(editingText);
+
+    console.group('SPLIT DEBUG');
+    console.log('Left text:', before);
+    console.log('Left tags:', leftMeta.tags);
+    console.log('Right text:', after);
+    console.log('Right tags:', rightMeta.tags);
+    console.groupEnd();
 
     // Undo should restore the original row and caret position, and remove the created row.
     setUndoAction({
       type: 'split',
-      original: task,
+      original: {
+        ...task,
+        text: editingText,
+        tags: originalMeta.tags,
+        meta: { tags: originalMeta.tags },
+      },
       createdId,
       cursor,
     });
@@ -560,8 +621,8 @@ export default function Home() {
       next[safeIndex] = {
         ...current,
         text: before,
-        tags: leftTags,
-        meta: { tags: leftTags },
+        tags: leftMeta.tags,
+        meta: { tags: leftMeta.tags },
       };
       const newTask: Task = {
         id: createdId,
@@ -569,10 +630,16 @@ export default function Home() {
         createdAt,
         completed: false,
         indent: current.indent,
-        tags: rightTags,
-        meta: { tags: rightTags },
+        tags: rightMeta.tags,
+        meta: { tags: rightMeta.tags },
       };
       next.splice(safeIndex + 1, 0, newTask);
+
+      console.log(
+        'POST-SPLIT TASKS:',
+        next.map(t => ({ id: t.id, text: t.text, tags: t.tags }))
+      );
+
       return next;
     });
 
@@ -847,7 +914,9 @@ export default function Home() {
   ======================= */
 
   const handlePointerDown = (index: number, e: React.PointerEvent) => {
-    if (normalizedQuery.length > 0) {
+    // Search is a view (lens) over the underlying list; while a view is active,
+    // disable drag/reorder to avoid surprising mutations.
+    if (deriveViewState(searchQuery)) {
       e.preventDefault();
       return;
     }
@@ -948,39 +1017,19 @@ export default function Home() {
   ======================= */
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
+  const viewState = deriveViewState(searchQuery);
 
-  const matchesSearch = (task: Task) => {
-    if (normalizedQuery.length === 0) return true;
-
-    const text = task.text.toLowerCase();
-    const tags = task.tags ?? [];
-
-    if (normalizedQuery.startsWith('#')) {
-      const needle = normalizedQuery.slice(1);
-      if (needle.length === 0) return true;
-      return tags.some(t => t.toLowerCase().includes(needle));
-    }
-
-    const needle = normalizedQuery;
-    return (
-      text.includes(needle) ||
-      tags.some(t => t.toLowerCase().includes(needle))
-    );
+  // Search acts as a temporary view (lens) over tasks.
+  // Views never mutate tasks and are exited by clearing search.
+  const applyView = (all: Task[], view: ViewState | null) => {
+    if (!view) return all.map((task, index) => ({ task, index }));
+    return all
+      .map((task, index) => ({ task, index }))
+      .filter(({ task }) => filterTasksBySearch(task, view.query));
   };
 
-  const visibleTasks =
-    normalizedQuery.length === 0
-      ? tasks
-      : tasks.filter(matchesSearch);
-
-  // Keep original indices so drag/undo/navigation that depend on task order stay correct
-  // even when we render a filtered subset.
-  const visibleTaskEntries =
-    normalizedQuery.length === 0
-      ? tasks.map((task, index) => ({ task, index }))
-      : tasks
-          .map((task, index) => ({ task, index }))
-          .filter(({ task }) => matchesSearch(task));
+  const visibleTaskEntries = applyView(tasks, viewState);
+  const visibleTasks = visibleTaskEntries.map(e => e.task);
 
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
@@ -1037,13 +1086,27 @@ export default function Home() {
         </div>
 
         {/* Optional indicator */}
+        {viewState !== null && (
+          <div className="mt-2 text-[10px] tracking-wider text-muted-foreground/70">
+            Viewing results
+          </div>
+        )}
         {normalizedQuery.length > 0 && (
-          <div className="mt-2 text-sm text-muted-foreground">
+          <div className="mt-1 text-sm text-muted-foreground">
             Showing {visibleTasks.length} of {tasks.length} tasks
           </div>
         )}
 
-        <div className="mt-8 space-y-2" role="list" ref={listRef}>
+        {/* Active view indicator: real left border for reliable visibility.
+            Views are ephemeral and exited by clearing search. */}
+        <div
+          className={cn(
+            'mt-8 space-y-2 relative',
+            viewState !== null ? 'border-l-[6px] border-accent pl-5' : ''
+          )}
+          role="list"
+          ref={listRef}
+        >
           {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
             const isActive =
               activeTaskId === task.id ||

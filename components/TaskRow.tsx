@@ -160,25 +160,36 @@ export default function TaskRow({
         />
 
         {!isEditing && (
-          <div
-            onMouseDown={e => {
-              e.preventDefault();
-              e.stopPropagation();
-              (onTextClick as any)(e);
-            }}
-            className={cn(
-              'col-start-1 row-start-1 text-lg cursor-text block w-full',
-              'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-              'leading-[1.4] min-h-[1.4em]',
-              completedClass
+          <>
+            <div
+              onMouseDown={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                (onTextClick as any)(e);
+              }}
+              className={cn(
+                'col-start-1 row-start-1 text-lg cursor-text block w-full',
+                'whitespace-pre-wrap break-words overflow-wrap-anywhere',
+                'leading-[1.4] min-h-[1.4em]',
+                completedClass
+              )}
+            >
+              {task.text.length > 0
+                ? searchQuery
+                  ? highlightMatches(task.text, searchQuery)
+                  : task.text
+                : '\u00A0'}
+            </div>
+
+            {task.tags && task.tags.length > 0 && (
+              <div
+                className="col-start-1 row-start-2 mt-0.5 text-[10px] leading-none font-mono opacity-50 truncate"
+                style={{ fontFamily: 'monospace' }}
+              >
+                tags: [{task.tags.join(', ')}]
+              </div>
             )}
-          >
-            {task.text.length > 0
-              ? searchQuery
-                ? highlightMatches(task.text, searchQuery)
-                : task.text
-              : '\u00A0'}
-          </div>
+          </>
         )}
       </div>
 
