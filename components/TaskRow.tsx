@@ -83,6 +83,8 @@ export default function TaskRow({
     ? 'text-muted-foreground line-through'
     : '';
 
+  const completedOpacityClass = task.completed ? 'opacity-70' : '';
+
   // Active tag emphasis is semantic (token-based), not substring search-based.
   const renderTextWithActiveTags = (text: string) => {
     const active = new Set((activeTags ?? []).map(t => t.toLowerCase()));
@@ -111,7 +113,7 @@ export default function TaskRow({
             key={`${tokenStart}-${tokenEnd}`}
             // Highlight intensity reflects semantic strength:
             // search match < active tag
-            className="bg-primary/[0.28] ring-2 ring-primary/[0.45] rounded px-0.5"
+            className="bg-primary/[0.28] ring-2 ring-primary/[0.45] rounded px-0.5 text-primary dark:text-primary-foreground"
           >
             {token}
           </mark>
@@ -158,9 +160,13 @@ export default function TaskRow({
       onFocus={onFocusRow as any}
       onMouseDown={onMouseDownRow as any}
       onKeyDownCapture={onKeyDownCapture as any}
-      className={`group relative flex items-start gap-3 rounded-lg px-4 py-3 bg-card focus:outline-none
-        outline outline-1 outline-border
-      `}
+      className={cn(
+        'group relative flex items-start gap-3 rounded-lg px-4 py-3 focus:outline-none',
+        // Elevation: page < panel < card
+        'bg-card dark:bg-secondary border border-border/60 dark:border-transparent',
+        'hover:border-border/80 dark:hover:border-transparent',
+        completedOpacityClass
+      )}
     >
       <div
         aria-hidden
@@ -228,7 +234,7 @@ export default function TaskRow({
                 (onTextClick as any)(e);
               }}
               className={cn(
-                'col-start-1 row-start-1 text-lg cursor-text block w-full',
+              'col-start-1 row-start-1 text-lg font-medium cursor-text block w-full',
                 'whitespace-pre-wrap break-words overflow-wrap-anywhere',
                 'leading-[1.4] min-h-[1.4em]',
                 completedClass
@@ -280,7 +286,7 @@ export default function TaskRow({
 
       <button
         onClick={onDelete as any}
-        aria-label="Delete task"
+        aria-label="Archive task"
         type="button"
         className="opacity-0 group-hover:opacity-100 text-destructive
                    inline-flex h-9 w-9 items-center justify-center rounded-full

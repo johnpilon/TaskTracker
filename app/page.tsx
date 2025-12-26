@@ -14,16 +14,23 @@ import { cn } from '../lib/utils';
 export interface Task {
   id: string;
   text: string;
-  createdAt: string;
+  createdAt: number; // unix timestamp (ms)
+  order: number; // stable manual ordering
   completed: boolean;
+  completedAt?: number;
+  archived: boolean;
+  archivedAt?: number;
   indent: number;
-  tags: string[];
+  tags: string[]; // lowercase, no '#', deduped
+  intent?: 'now' | 'soon' | 'later';
   meta?: TaskMeta; // optional for backward compatibility
 }
 
 export interface TaskMeta {
   tags: string[];
 }
+
+export type TaskIntent = 'now' | 'soon' | 'later' | null;
 
 type ViewState = { type: 'search'; query: string };
 
@@ -55,7 +62,8 @@ const UI_STATE_KEY = 'task_ui_state';
 ======================= */
 
 export default function Home() {
-  const [tasks, setTasks] = usePersistentTasks();
+  const [allTasks, setAllTasks] = usePersistentTasks();
+  const tasks = allTasks.filter(t => !t.archived);
   const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [recentViews, setRecentViews] = useState<string[]>([]);
@@ -153,6 +161,34 @@ export default function Home() {
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);
+
+  const parseTaskInput = (
+    raw: string
+  ): { text: string; tags: string[]; intent?: Task['intent'] } => {
+    // Parse inline tokens on commit only (create/edit).
+    // Tags are derived from text via parseTaskMeta.
+    // Intent tokens (!now/!soon/!later) are stripped from visible text.
+    let intent: Task['intent'] | undefined = undefined;
+
+    const withoutIntent = raw.replace(
+      /(^|\s)!(now|soon|later)(?=\s|$)/gi,
+      (_m, leading, which) => {
+        intent = String(which).toLowerCase() as Task['intent'];
+        return leading || ' ';
+      }
+    );
+
+    const text = withoutIntent.replace(/\s+/g, ' ').trim();
+    const tags = parseTaskMeta(text).tags;
+    return { text, tags, ...(intent ? { intent } : {}) };
+  };
+
+  const cycleIntent = (current: Task['intent'] | undefined): Task['intent'] | undefined => {
+    if (!current) return 'now';
+    if (current === 'now') return 'soon';
+    if (current === 'soon') return 'later';
+    return undefined;
+  };
 
   // Tag clicks compose only with other tags.
   // Text searches are exploratory and replaced by tag views.
@@ -483,7 +519,7 @@ export default function Home() {
           pendingFocusRef.current = { taskId: undoAction.task.id, mode: 'row' };
         }
 
-        setTasks(prev => {
+        setAllTasks(prev => {
           switch (undoAction.type) {
             case 'delete': {
               const next = [...prev];
@@ -541,7 +577,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [undoAction, tasks, activeTaskId, editingId, setTasks]);
+  }, [undoAction, tasks, activeTaskId, editingId, setAllTasks]);
 
   /* =======================
      Task Actions
@@ -550,18 +586,22 @@ export default function Home() {
   const addTask = () => {
     if (!input.trim()) return;
 
-    const text = input.trim();
-    const tags = computeTags(text);
+    const parsed = parseTaskInput(input.trim());
+    const text = parsed.text;
 
-    setTasks(prev => [
+    const now = Date.now();
+    setAllTasks(prev => [
       {
-        id: Date.now().toString(),
+        id: now.toString(),
         text,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        order: now,
         completed: false,
+        archived: false,
         indent: 0,
-        tags,
-        meta: { tags },
+        tags: parsed.tags,
+        ...(parsed.intent ? { intent: parsed.intent } : {}),
+        meta: { tags: parsed.tags },
       },
       ...prev,
     ]);
@@ -572,16 +612,32 @@ export default function Home() {
 
   const toggleTask = (task: Task) => {
     setUndoAction({ type: 'toggle', task });
-    setTasks(prev =>
+    setAllTasks(prev =>
       prev.map(t =>
-        t.id === task.id ? { ...t, completed: !t.completed } : t
+        t.id === task.id
+          ? {
+              ...t,
+              completed: !t.completed,
+              ...(t.completed ? { completedAt: undefined } : { completedAt: Date.now() }),
+            }
+          : t
       )
     );
   };
 
-  const deleteTask = (task: Task, index: number) => {
-    setUndoAction({ type: 'delete', task, index });
-    setTasks(prev => prev.filter(t => t.id !== task.id));
+  const archiveTask = (task: Task) => {
+    setUndoAction({ type: 'edit', task });
+    setAllTasks(prev =>
+      prev.map(t =>
+        t.id === task.id
+          ? {
+              ...t,
+              archived: true,
+              archivedAt: Date.now(),
+            }
+          : t
+      )
+    );
   };
 
   const startEditing = (task: Task, caret: number) => {
@@ -595,19 +651,20 @@ export default function Home() {
     const hasTextChanged = editingText !== task.text;
   
     if (hasTextChanged) {
-      const nextText = editingText;
-      const nextTags = computeTags(nextText);
+      const parsed = parseTaskInput(editingText);
+      const nextText = parsed.text;
   
       setUndoAction({ type: 'edit', task });
   
-      setTasks(prev =>
+      setAllTasks(prev =>
         prev.map(t =>
           t.id === task.id
             ? {
                 ...t,
                 text: nextText,
-                tags: nextTags,
-                meta: { tags: nextTags },
+                tags: parsed.tags,
+                ...(parsed.intent ? { intent: parsed.intent } : { intent: undefined }),
+                meta: { tags: parsed.tags },
               }
             : t
         )
@@ -621,22 +678,30 @@ export default function Home() {
 
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
     const createdId = createId();
-    const createdAt = new Date().toISOString();
+    const createdAt = Date.now();
 
     const before = editingText.slice(0, cursor);
     const after = editingText.slice(cursor);
 
     // IMPORTANT: tags must always be derived from text.
     // Never copy tags between tasks.
-    const leftMeta = parseTaskMeta(before);
-    const rightMeta = parseTaskMeta(after);
-    const originalMeta = parseTaskMeta(editingText);
+    const leftParsed = parseTaskInput(before);
+    const rightParsed = parseTaskInput(after);
+    const originalParsed = parseTaskInput(editingText);
+
+    const leftText = leftParsed.text;
+    const rightText = rightParsed.text;
+    const originalText = originalParsed.text;
+
+    const leftMetaTags = leftParsed.tags;
+    const rightMetaTags = rightParsed.tags;
+    const originalMetaTags = originalParsed.tags;
 
     console.group('SPLIT DEBUG');
-    console.log('Left text:', before);
-    console.log('Left tags:', leftMeta.tags);
-    console.log('Right text:', after);
-    console.log('Right tags:', rightMeta.tags);
+    console.log('Left text:', leftText);
+    console.log('Left tags:', leftMetaTags);
+    console.log('Right text:', rightText);
+    console.log('Right tags:', rightMetaTags);
     console.groupEnd();
 
     // Undo should restore the original row and caret position, and remove the created row.
@@ -644,15 +709,16 @@ export default function Home() {
       type: 'split',
       original: {
         ...task,
-        text: editingText,
-        tags: originalMeta.tags,
-        meta: { tags: originalMeta.tags },
+        text: originalText,
+        tags: originalMetaTags,
+        ...(originalParsed.intent ? { intent: originalParsed.intent } : { intent: undefined }),
+        meta: { tags: originalMetaTags },
       },
       createdId,
       cursor,
     });
 
-    setTasks(prev => {
+    setAllTasks(prev => {
       const next = [...prev];
       const currentIndex = next.findIndex(t => t.id === task.id);
       const safeIndex = currentIndex >= 0 ? currentIndex : index;
@@ -662,18 +728,22 @@ export default function Home() {
 
       next[safeIndex] = {
         ...current,
-        text: before,
-        tags: leftMeta.tags,
-        meta: { tags: leftMeta.tags },
+        text: leftText,
+        tags: leftMetaTags,
+        ...(leftParsed.intent ? { intent: leftParsed.intent } : { intent: undefined }),
+        meta: { tags: leftMetaTags },
       };
       const newTask: Task = {
         id: createdId,
-        text: after,
+        text: rightText,
         createdAt,
+        order: createdAt,
         completed: false,
+        archived: false,
         indent: current.indent,
-        tags: rightMeta.tags,
-        meta: { tags: rightMeta.tags },
+        tags: rightMetaTags,
+        ...(rightParsed.intent ? { intent: rightParsed.intent } : {}),
+        meta: { tags: rightMetaTags },
       };
       next.splice(safeIndex + 1, 0, newTask);
 
@@ -687,7 +757,7 @@ export default function Home() {
 
     setActiveTaskId(createdId);
     setEditingId(createdId);
-    setEditingText(after);
+    setEditingText(rightText);
     setCaretPos(0);
     caretInitializedRef.current = false;
   };
@@ -708,8 +778,11 @@ export default function Home() {
       if (index === 0) return;
 
       const prev = tasks[index - 1];
-      const merged = prev.text + editingText;
-      const mergedTags = computeTags(merged);
+      const mergedRaw = prev.text + editingText;
+      const parsed = parseTaskInput(mergedRaw);
+      const merged = parsed.text;
+      const mergedTags = parsed.tags;
+      const mergedIntent = parsed.intent ?? prev.intent;
 
       setUndoAction({
         type: 'merge',
@@ -719,12 +792,13 @@ export default function Home() {
         caret: 0,
       });
 
-      setTasks(prevTasks => {
+      setAllTasks(prevTasks => {
         const next = [...prevTasks];
         next[index - 1] = {
           ...prev,
           text: merged,
           tags: mergedTags,
+          ...(mergedIntent ? { intent: mergedIntent } : { intent: undefined }),
           meta: { tags: mergedTags },
         };
         next.splice(index, 1);
@@ -748,12 +822,20 @@ export default function Home() {
       // Commit this row text before switching
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const nextText = editingText;
-        const nextTags = computeTags(nextText);
-        setTasks(prev =>
+        const parsed = parseTaskInput(editingText);
+        const nextText = parsed.text;
+        const nextTags = parsed.tags;
+        const nextIntent = parsed.intent;
+        setAllTasks(prev =>
           prev.map(t =>
             t.id === task.id
-              ? { ...t, text: nextText, tags: nextTags, meta: { tags: nextTags } }
+              ? {
+                  ...t,
+                  text: nextText,
+                  tags: nextTags,
+                  ...(nextIntent ? { intent: nextIntent } : { intent: undefined }),
+                  meta: { tags: nextTags },
+                }
               : t
           )
         );
@@ -778,12 +860,20 @@ export default function Home() {
 
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const nextText = editingText;
-        const nextTags = computeTags(nextText);
-        setTasks(prev =>
+        const parsed = parseTaskInput(editingText);
+        const nextText = parsed.text;
+        const nextTags = parsed.tags;
+        const nextIntent = parsed.intent;
+        setAllTasks(prev =>
           prev.map(t =>
             t.id === task.id
-              ? { ...t, text: nextText, tags: nextTags, meta: { tags: nextTags } }
+              ? {
+                  ...t,
+                  text: nextText,
+                  tags: nextTags,
+                  ...(nextIntent ? { intent: nextIntent } : { intent: undefined }),
+                  meta: { tags: nextTags },
+                }
               : t
           )
         );
@@ -804,8 +894,11 @@ export default function Home() {
       if (index >= tasks.length - 1) return;
 
       const nextTask = tasks[index + 1];
-      const merged = editingText + nextTask.text;
-      const mergedTags = computeTags(merged);
+      const mergedRaw = editingText + nextTask.text;
+      const parsed = parseTaskInput(mergedRaw);
+      const merged = parsed.text;
+      const mergedTags = parsed.tags;
+      const mergedIntent = parsed.intent ?? task.intent;
 
       setUndoAction({
         type: 'merge',
@@ -815,12 +908,13 @@ export default function Home() {
         caret: editingText.length,
       });
 
-      setTasks(prevTasks => {
+      setAllTasks(prevTasks => {
         const next = [...prevTasks];
         next[index] = {
           ...task,
           text: merged,
           tags: mergedTags,
+          ...(mergedIntent ? { intent: mergedIntent } : { intent: undefined }),
           meta: { tags: mergedTags },
         };
         next.splice(index + 1, 1);
@@ -848,7 +942,7 @@ export default function Home() {
       }
       e.preventDefault();
       setUndoAction({ type: 'indent', task });
-      setTasks(prev =>
+      setAllTasks(prev =>
         prev.map(t =>
           t.id === task.id
             ? {
@@ -910,7 +1004,7 @@ export default function Home() {
       if (activeTaskId !== task.id) setActiveTaskId(task.id);
 
       setUndoAction({ type: 'indent', task });
-      setTasks(prev =>
+      setAllTasks(prev =>
         prev.map(t =>
           t.id === task.id
             ? {
@@ -998,7 +1092,7 @@ export default function Home() {
             Math.min(MAX_INDENT, baseIndentRef.current + step)
           );
 
-          setTasks(prev => {
+          setAllTasks(prev => {
             const next = [...prev];
             next[currentIndex] = { ...next[currentIndex], indent: targetIndent };
             return next;
@@ -1010,7 +1104,7 @@ export default function Home() {
 
         // Vertical reorder
         const move = (from: number, to: number) => {
-          setTasks(prev => {
+          setAllTasks(prev => {
             const next = [...prev];
             const [moved] = next.splice(from, 1);
             next.splice(to, 0, moved);
@@ -1398,20 +1492,22 @@ export default function Home() {
           </div>
         )}
 
-        {/* Active view indicator: real left border for reliable visibility.
-            Views are ephemeral and exited by clearing search. */}
-        <div
-          className={cn(
-            'mt-8 space-y-2 relative',
-            viewState !== null
-              ? isTagView
-                ? 'border-l-[6px] border-primary/80 pl-5'
-                : 'border-l-[6px] border-accent pl-5'
-              : ''
-          )}
-          role="list"
-          ref={listRef}
-        >
+        {/* Task list container provides visual structure without adding noise. */}
+        <div className="mt-8 rounded-xl border border-border/50 bg-secondary dark:bg-card p-5 sm:p-6">
+          {/* Active view indicator: real left border for reliable visibility.
+              Views are ephemeral and exited by clearing search. */}
+          <div
+            className={cn(
+              'space-y-1.5 dark:space-y-2 relative',
+              viewState !== null
+                ? isTagView
+                  ? 'border-l-[6px] border-primary/80 pl-5'
+                  : 'border-l-[6px] border-accent pl-5'
+                : ''
+            )}
+            role="list"
+            ref={listRef}
+          >
           {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
             const isActive =
               activeTaskId === task.id ||
@@ -1461,7 +1557,7 @@ export default function Home() {
                     setUndoAction({ type: 'edit', task });
                   }
 
-                  setTasks(prev =>
+                  setAllTasks(prev =>
                     prev.map(t =>
                       t.id === task.id ? { ...t, text: value } : t
                     )
@@ -1480,10 +1576,11 @@ export default function Home() {
                   );
                 }}
                 searchQuery={normalizedQuery}
-                onDelete={() => deleteTask(task, index)}
+                onDelete={() => archiveTask(task)}
               />
             );
           })}
+          </div>
         </div>
       </div>
     </div>

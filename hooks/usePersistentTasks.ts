@@ -9,6 +9,38 @@ const BACKUP_STORAGE_KEY = 'tasks_backup'; // NEW
 const STORAGE_VERSION = 1;
 const MAX_INDENT = 2;
 
+const INTENTS = new Set(['now', 'soon', 'later']);
+
+const sortTasks = (list: Task[]): Task[] => {
+  const now: Task[] = [];
+  const soon: Task[] = [];
+  const later: Task[] = [];
+  const none: Task[] = [];
+  const archived: Task[] = [];
+
+  for (const t of list) {
+    if (t.archived) {
+      archived.push(t);
+      continue;
+    }
+    if (t.intent === 'now') now.push(t);
+    else if (t.intent === 'soon') soon.push(t);
+    else if (t.intent === 'later') later.push(t);
+    else none.push(t);
+  }
+
+  const byOrder = (a: Task, b: Task) => a.order - b.order;
+  now.sort(byOrder);
+  soon.sort(byOrder);
+  later.sort(byOrder);
+  none.sort(byOrder);
+
+  // Archived tasks kept at the end, stable by archivedAt (fallback to order).
+  archived.sort((a, b) => (a.archivedAt ?? a.order) - (b.archivedAt ?? b.order));
+
+  return [...now, ...soon, ...later, ...none, ...archived];
+};
+
 type StoredPayload = {
   version: number;
   tasks: unknown;
@@ -20,17 +52,43 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const normalizeTask = (value: unknown): Task | null => {
   if (!isPlainObject(value)) return null;
 
-  const { id, text, completed, indent, createdAt, tags, meta } = value;
+  const { id, text, completed, indent, createdAt, tags, meta, intent, order, archived, completedAt, archivedAt } =
+    value;
 
   if (typeof id !== 'string' || typeof text !== 'string') return null;
 
   const safeCompleted = typeof completed === 'boolean' ? completed : false;
+  const safeArchived = typeof archived === 'boolean' ? archived : false;
+
+  const safeCreatedAt =
+    typeof createdAt === 'number' && Number.isFinite(createdAt)
+      ? Math.trunc(createdAt)
+      : typeof createdAt === 'string'
+        ? Date.parse(createdAt) || Date.now()
+        : Date.now();
+
+  const safeOrder =
+    typeof order === 'number' && Number.isFinite(order) ? Math.trunc(order) : safeCreatedAt;
+
+  const safeIntent =
+    typeof intent === 'string' && INTENTS.has(intent) ? (intent as NonNullable<Task['intent']>) : undefined;
+
+  const safeCompletedAt =
+    safeCompleted && typeof completedAt === 'number' && Number.isFinite(completedAt)
+      ? Math.trunc(completedAt)
+      : safeCompleted
+        ? safeCreatedAt
+        : undefined;
+
+  const safeArchivedAt =
+    safeArchived && typeof archivedAt === 'number' && Number.isFinite(archivedAt)
+      ? Math.trunc(archivedAt)
+      : safeArchived
+        ? safeCreatedAt
+        : undefined;
   const indentNumber =
     typeof indent === 'number' && Number.isFinite(indent) ? indent : 0;
   const safeIndent = Math.max(0, Math.min(MAX_INDENT, Math.trunc(indentNumber)));
-  const safeCreatedAt =
-    typeof createdAt === 'string' ? createdAt : new Date().toISOString();
-
   const safeTags =
     Array.isArray(tags) && tags.every(t => typeof t === 'string') ? tags : [];
 
@@ -45,10 +103,15 @@ const normalizeTask = (value: unknown): Task | null => {
   return {
     id,
     text,
-    completed: safeCompleted,
-    indent: safeIndent,
     createdAt: safeCreatedAt,
+    order: safeOrder,
+    completed: safeCompleted,
+    ...(safeCompletedAt ? { completedAt: safeCompletedAt } : {}),
+    archived: safeArchived,
+    ...(safeArchivedAt ? { archivedAt: safeArchivedAt } : {}),
+    indent: safeIndent,
     tags: safeTags,
+    ...(safeIntent ? { intent: safeIntent } : {}),
     ...(safeMeta ? { meta: safeMeta } : {}),
   };
 };
@@ -117,7 +180,11 @@ export default function usePersistentTasks(): [
   useEffect(() => {
     const loaded = loadTasks();
     loadedTasksRef.current = loaded;
-    setTasks(loaded);
+    // Assign missing order values based on current sequence for older payloads.
+    const withOrder = loaded.map((t: Task, idx: number) =>
+      typeof t.order === 'number' ? t : { ...t, order: idx }
+    );
+    setTasks(sortTasks(withOrder));
   }, []);
 
   useEffect(() => {
@@ -140,5 +207,16 @@ export default function usePersistentTasks(): [
     }
   }, [tasks]);
 
-  return [tasks, setTasks];
+  const setTasksSorted: React.Dispatch<React.SetStateAction<Task[]>> = updater => {
+    setTasks(prev => {
+      const next = typeof updater === 'function' ? (updater as any)(prev) : updater;
+      // Reindex order to preserve manual ordering across updates.
+      const reindexed = (next as Task[]).map((t: Task, idx: number) =>
+        t.archived ? t : { ...t, order: idx }
+      );
+      return sortTasks(reindexed);
+    });
+  };
+
+  return [tasks, setTasksSorted];
 }
