@@ -19,10 +19,11 @@ export interface Task {
   completed: boolean;
   completedAt?: number;
   archived: boolean;
-  archivedAt?: number;
+  archivedAt?: string; // ISO timestamp (set when completed becomes true)
   indent: number;
   tags: string[]; // lowercase, no '#', deduped
   intent?: 'now' | 'soon' | 'later';
+  momentum?: boolean; // deliberate working set (boolean state)
   meta?: TaskMeta; // optional for backward compatibility
 }
 
@@ -32,7 +33,8 @@ export interface TaskMeta {
 
 export type TaskIntent = 'now' | 'soon' | 'later' | null;
 
-type ViewState = { type: 'search'; query: string };
+type SearchViewState = { type: 'search'; query: string };
+type ViewState = SearchViewState | { type: 'momentum' };
 
 type UndoAction =
   | { type: 'delete'; task: Task; index: number }
@@ -67,6 +69,7 @@ export default function Home() {
   const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [recentViews, setRecentViews] = useState<string[]>([]);
+  const [isMomentumViewActive, setIsMomentumViewActive] = useState(false);
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -149,7 +152,7 @@ export default function Home() {
     });
   };
 
-  const deriveViewState = (raw: string): ViewState | null => {
+  const deriveViewState = (raw: string): SearchViewState | null => {
     const query = raw.trim().toLowerCase();
     if (query.length === 0) return null;
     return { type: 'search', query };
@@ -164,11 +167,12 @@ export default function Home() {
 
   const parseTaskInput = (
     raw: string
-  ): { text: string; tags: string[]; intent?: Task['intent'] } => {
+  ): { text: string; tags: string[]; intent?: Task['intent']; momentum?: boolean } => {
     // Parse inline tokens on commit only (create/edit).
     // Tags are derived from text via parseTaskMeta.
     // Intent tokens (!now/!soon/!later) are stripped from visible text.
     let intent: Task['intent'] | undefined = undefined;
+    let momentum = false;
 
     const withoutIntent = raw.replace(
       /(^|\s)!(now|soon|later)(?=\s|$)/gi,
@@ -178,9 +182,53 @@ export default function Home() {
       }
     );
 
-    const text = withoutIntent.replace(/\s+/g, ' ').trim();
+    // Momentum accelerator token: `!m`
+    const withoutMomentum = withoutIntent.replace(
+      /(^|\s)!m(?=\s|$)/gi,
+      (m, leading) => {
+        momentum = true;
+        return leading || ' ';
+      }
+    );
+
+    const text = withoutMomentum.replace(/\s+/g, ' ').trim();
     const tags = parseTaskMeta(text).tags;
-    return { text, tags, ...(intent ? { intent } : {}) };
+    return { text, tags, ...(intent ? { intent } : {}), ...(momentum ? { momentum } : {}) };
+  };
+
+  // Centralized commit logic: deterministic + idempotent.
+  // Tags are ALWAYS derived from committed text.
+  const commitTaskText = (
+    taskId: string,
+    rawText: string,
+    opts?: { defaultIntent?: Task['intent']; preserveExistingIntent?: boolean }
+  ) => {
+    const parsed = parseTaskInput(rawText);
+    const nextText = parsed.text;
+    const nextTags = parsed.tags;
+
+    setAllTasks(prev =>
+      prev.map(t =>
+        t.id === taskId
+          ? {
+              ...t,
+              text: nextText,
+              tags: nextTags,
+              ...(() => {
+                const nextIntent =
+                  parsed.intent ??
+                  opts?.defaultIntent ??
+                  (opts?.preserveExistingIntent ? t.intent : undefined);
+                return nextIntent ? { intent: nextIntent } : { intent: undefined };
+              })(),
+              // Shorthand accelerator: typing `!m` turns Momentum on.
+              // It does NOT auto-turn Momentum off if you later remove `!m` from the text.
+              ...(parsed.momentum ? { momentum: true } : {}),
+              meta: { tags: nextTags },
+            }
+          : t
+      )
+    );
   };
 
   const cycleIntent = (current: Task['intent'] | undefined): Task['intent'] | undefined => {
@@ -195,6 +243,10 @@ export default function Home() {
   const handleTagSearchClick = (rawTag: string) => {
     const clicked = `#${rawTag.trim().toLowerCase()}`;
     if (clicked === '#') return;
+    if (editingId) {
+      const current = tasks.find(t => t.id === editingId) ?? null;
+      if (current) saveEdit(current);
+    }
 
     setSearchQuery(prev => {
       const current = prev.trim().toLowerCase();
@@ -600,7 +652,9 @@ export default function Home() {
         archived: false,
         indent: 0,
         tags: parsed.tags,
-        ...(parsed.intent ? { intent: parsed.intent } : {}),
+        // New tasks must be highest-visibility; default to 'now' unless explicitly set.
+        ...(parsed.intent ? { intent: parsed.intent } : { intent: 'now' }),
+        momentum: parsed.momentum === true,
         meta: { tags: parsed.tags },
       },
       ...prev,
@@ -610,7 +664,7 @@ export default function Home() {
     inputRef.current?.focus();
   };
 
-  const toggleTask = (task: Task) => {
+  const toggleCompleted = (task: Task) => {
     setUndoAction({ type: 'toggle', task });
     setAllTasks(prev =>
       prev.map(t =>
@@ -625,55 +679,76 @@ export default function Home() {
     );
   };
 
-  const archiveTask = (task: Task) => {
-    setUndoAction({ type: 'edit', task });
-    setAllTasks(prev =>
-      prev.map(t =>
-        t.id === task.id
-          ? {
-              ...t,
-              archived: true,
-              archivedAt: Date.now(),
-            }
-          : t
-      )
-    );
+  const deleteTask = (task: Task) => {
+    // Permanent delete: one click, repeatable, undoable (Ctrl/Cmd+Z).
+    setAllTasks(prev => {
+      const index = prev.findIndex(t => t.id === task.id);
+      if (index < 0) return prev;
+      setUndoAction({ type: 'delete', task, index });
+      const next = [...prev];
+      next.splice(index, 1);
+      return next;
+    });
   };
 
   const startEditing = (task: Task, caret: number) => {
+    // Leaving the field === commit intent.
+    // When switching edits, commit the current edit first.
+    if (editingId && editingId !== task.id) {
+      const current = tasks.find(t => t.id === editingId) ?? null;
+      if (current) saveEdit(current);
+    }
     setEditingId(task.id);
     setEditingText(task.text);
     setCaretPos(caret ?? task.text.length ?? 0);
     caretInitializedRef.current = false;
+    editingOriginalRef.current = { taskId: task.id, snapshot: task };
+  };
+
+  const commitActiveEditIfAny = () => {
+    if (!editingId) return;
+    const current = tasks.find(t => t.id === editingId) ?? null;
+    if (!current) return;
+    saveEdit(current);
   };
 
   const saveEdit = (task: Task) => {
-    const hasTextChanged = editingText !== task.text;
-  
-    if (hasTextChanged) {
-      const parsed = parseTaskInput(editingText);
-      const nextText = parsed.text;
-  
-      setUndoAction({ type: 'edit', task });
-  
-      setAllTasks(prev =>
-        prev.map(t =>
-          t.id === task.id
-            ? {
-                ...t,
-                text: nextText,
-                tags: parsed.tags,
-                ...(parsed.intent ? { intent: parsed.intent } : { intent: undefined }),
-                meta: { tags: parsed.tags },
-              }
-            : t
-        )
-      );
+    const originalSnapshot =
+      editingOriginalRef.current && editingOriginalRef.current.taskId === task.id
+        ? editingOriginalRef.current.snapshot
+        : task;
+
+    const parsed = parseTaskInput(editingText);
+    const nextTags = parsed.tags;
+
+    const prevTags = originalSnapshot.tags ?? [];
+    const tagsChanged =
+      prevTags.length !== nextTags.length ||
+      prevTags.some((t, i) => t !== nextTags[i]);
+
+    const textChanged = parsed.text !== originalSnapshot.text;
+    const shouldCommit = textChanged || tagsChanged || parsed.intent !== undefined;
+
+    if (shouldCommit) {
+      setUndoAction({ type: 'edit', task: originalSnapshot });
+      commitTaskText(task.id, editingText, { preserveExistingIntent: true });
     }
-  
+
     setEditingId(null);
     setEditingText('');
     setCaretPos(null);
+    editingOriginalRef.current = null;
+  };
+
+  const toggleMomentum = (task: Task) => {
+    setUndoAction({ type: 'edit', task });
+    setAllTasks(prev =>
+      prev.map(t =>
+        t.id === task.id
+          ? { ...t, momentum: t.momentum === true ? false : true }
+          : t
+      )
+    );
   };
 
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
@@ -731,6 +806,7 @@ export default function Home() {
         text: leftText,
         tags: leftMetaTags,
         ...(leftParsed.intent ? { intent: leftParsed.intent } : { intent: undefined }),
+        ...(leftParsed.momentum ? { momentum: true } : {}),
         meta: { tags: leftMetaTags },
       };
       const newTask: Task = {
@@ -743,6 +819,7 @@ export default function Home() {
         indent: current.indent,
         tags: rightMetaTags,
         ...(rightParsed.intent ? { intent: rightParsed.intent } : {}),
+        momentum: rightParsed.momentum === true,
         meta: { tags: rightMetaTags },
       };
       next.splice(safeIndex + 1, 0, newTask);
@@ -799,6 +876,8 @@ export default function Home() {
           text: merged,
           tags: mergedTags,
           ...(mergedIntent ? { intent: mergedIntent } : { intent: undefined }),
+          momentum:
+            prev.momentum === true || task.momentum === true || parsed.momentum === true,
           meta: { tags: mergedTags },
         };
         next.splice(index, 1);
@@ -822,23 +901,7 @@ export default function Home() {
       // Commit this row text before switching
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const parsed = parseTaskInput(editingText);
-        const nextText = parsed.text;
-        const nextTags = parsed.tags;
-        const nextIntent = parsed.intent;
-        setAllTasks(prev =>
-          prev.map(t =>
-            t.id === task.id
-              ? {
-                  ...t,
-                  text: nextText,
-                  tags: nextTags,
-                  ...(nextIntent ? { intent: nextIntent } : { intent: undefined }),
-                  meta: { tags: nextTags },
-                }
-              : t
-          )
-        );
+        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const prevTask = tasks[index - 1];
@@ -860,23 +923,7 @@ export default function Home() {
 
       if (editingText !== task.text) {
         setUndoAction({ type: 'edit', task });
-        const parsed = parseTaskInput(editingText);
-        const nextText = parsed.text;
-        const nextTags = parsed.tags;
-        const nextIntent = parsed.intent;
-        setAllTasks(prev =>
-          prev.map(t =>
-            t.id === task.id
-              ? {
-                  ...t,
-                  text: nextText,
-                  tags: nextTags,
-                  ...(nextIntent ? { intent: nextIntent } : { intent: undefined }),
-                  meta: { tags: nextTags },
-                }
-              : t
-          )
-        );
+        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const nextTask = tasks[index + 1];
@@ -915,6 +962,8 @@ export default function Home() {
           text: merged,
           tags: mergedTags,
           ...(mergedIntent ? { intent: mergedIntent } : { intent: undefined }),
+          momentum:
+            task.momentum === true || nextTask.momentum === true || parsed.momentum === true,
           meta: { tags: mergedTags },
         };
         next.splice(index + 1, 1);
@@ -1153,10 +1202,11 @@ export default function Home() {
   ======================= */
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const viewState = deriveViewState(searchQuery);
+  const searchViewState = deriveViewState(searchQuery);
+  const isMomentumView = isMomentumViewActive;
   const activeTagTokens = (() => {
-    if (!viewState) return [] as string[];
-    const tokens = tokenizeQuery(viewState.query);
+    if (!searchViewState) return [] as string[];
+    const tokens = tokenizeQuery(searchViewState.query);
     // Normalize + de-dupe while preserving token order.
     const seen = new Set<string>();
     const tags: string[] = [];
@@ -1170,8 +1220,8 @@ export default function Home() {
   })();
 
   const isTagView = (() => {
-    if (!viewState) return false;
-    const tokens = tokenizeQuery(viewState.query);
+    if (!searchViewState) return false;
+    const tokens = tokenizeQuery(searchViewState.query);
     if (tokens.length === 0) return false;
     return tokens.every(t => t.startsWith('#') && t.length > 1);
   })();
@@ -1185,7 +1235,7 @@ export default function Home() {
   };
 
   const activeFilterTokens = (() => {
-    if (!viewState) return [] as Array<{ display: string; key: string }>;
+    if (!searchViewState) return [] as Array<{ display: string; key: string }>;
     const raw = canonicalizeViewQuery(searchQuery);
     if (raw.length === 0) return [];
     return raw
@@ -1242,26 +1292,23 @@ export default function Home() {
     return parts;
   };
 
-  useEffect(() => {
-    // Commit view to recents only after a short pause (avoid every keystroke).
-    const q = canonicalizeViewQuery(searchQuery);
-    if (q.length === 0) return;
-
-    const t = window.setTimeout(() => commitRecentView(q), 800);
-    return () => window.clearTimeout(t);
-  }, [searchQuery]);
-
-  // Search acts as a temporary view (lens) over tasks.
-  // Views never mutate tasks and are exited by clearing search.
-  const applyView = (all: Task[], view: ViewState | null) => {
-    if (!view) return all.map((task, index) => ({ task, index }));
-    return all
-      .map((task, index) => ({ task, index }))
-      .filter(({ task }) => filterTasksBySearch(task, view.query));
+  // Search is always live. Momentum view is a persistent lens and can coexist with search.
+  const applyView = (all: Task[], search: SearchViewState | null, momentumActive: boolean) => {
+    let entries = all.map((task, index) => ({ task, index }));
+    if (momentumActive) {
+      entries = entries.filter(({ task }) => task.momentum === true);
+    }
+    if (search) {
+      entries = entries.filter(({ task }) => filterTasksBySearch(task, search.query));
+    }
+    return entries;
   };
 
-  const visibleTaskEntries = applyView(tasks, viewState);
+  const visibleTaskEntries = applyView(tasks, searchViewState, isMomentumViewActive);
   const visibleTasks = visibleTaskEntries.map(e => e.task);
+  const momentumCount = isMomentumView
+    ? visibleTasks.length
+    : tasks.filter(t => !t.completed && t.momentum === true).length;
 
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
@@ -1272,6 +1319,10 @@ export default function Home() {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && addTask()}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           placeholder="What needs to be done?"
           className="w-full bg-card border border-border rounded-lg px-6 py-4 text-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
@@ -1294,8 +1345,14 @@ export default function Home() {
           <input
             ref={searchInputRef}
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            onChange={e => {
+              setSearchQuery(e.target.value);
+            }}
             onBlur={() => commitRecentView(searchQuery)}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             onKeyDown={e => {
               // Backspace removes the last active tag when search is empty.
               if (
@@ -1350,6 +1407,7 @@ export default function Home() {
               type="button"
               aria-label="Clear search"
               onClick={() => {
+                commitActiveEditIfAny();
                 setSearchQuery('');
                 searchInputRef.current?.focus();
               }}
@@ -1369,7 +1427,7 @@ export default function Home() {
 
         {/* Active filters represent current state.
             Recent views are navigational history and must remain visually distinct. */}
-        {viewState !== null && activeFilterTokens.length > 0 && (
+        {searchViewState !== null && activeFilterTokens.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {activeFilterTokens.map(t => (
               <div
@@ -1400,6 +1458,70 @@ export default function Home() {
           </div>
         )}
 
+        {/* First-class derived view */}
+        <div className="mt-4">
+          <div className="text-[10px] tracking-wider text-muted-foreground/70">
+            Views
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <div
+              className={cn(
+                'h-8 max-w-full',
+                'inline-flex items-center rounded-full',
+                'border border-border/70',
+                isMomentumView
+                  ? 'bg-card/30 text-foreground'
+                  : 'bg-muted/20 text-muted-foreground'
+              )}
+            >
+              <button
+                type="button"
+                className={cn(
+                  'h-full max-w-full px-3',
+                  'inline-flex items-center gap-2',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full'
+                )}
+                onMouseDown={e => {
+                  // keep focus behavior predictable on mobile/desktop
+                    commitActiveEditIfAny();
+                  e.preventDefault();
+                }}
+                onClick={() => {
+                  const next = !isMomentumViewActive;
+                  setIsMomentumViewActive(next);
+                }}
+              >
+                <span className="truncate">
+                  Momentum{isMomentumView ? ` (${momentumCount})` : ''}
+                </span>
+              </button>
+
+              {isMomentumView && (
+                <button
+                  type="button"
+                  aria-label="Exit momentum view"
+                  className={cn(
+                    'mr-1 inline-flex h-6 w-6 items-center justify-center rounded-full',
+                    'text-muted-foreground/70 hover:text-foreground',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  )}
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onClick={e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsMomentumViewActive(false);
+                  }}
+                >
+                  <span aria-hidden>×</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Recent views visibility is based on history existence, not input focus. */}
         {recentViews.length > 0 && (
           <div className="mt-4">
@@ -1427,6 +1549,7 @@ export default function Home() {
                     )}
                     onMouseDown={e => {
                       // keep focus behavior predictable on mobile/desktop
+                      commitActiveEditIfAny();
                       e.preventDefault();
                     }}
                     onClick={() => {
@@ -1481,9 +1604,14 @@ export default function Home() {
 
         {/* Optional indicator */}
         {/* Tag views and text views share mechanics but have distinct visual identity. */}
-        {viewState !== null && (
+        {(isMomentumViewActive || searchViewState !== null) && (
           <div className="mt-2 text-[10px] tracking-wider text-muted-foreground/70">
-            {isTagView ? 'Viewing tag' : 'Viewing results'}
+            {isMomentumView ? 'Momentum' : isTagView ? 'Viewing tag' : 'Viewing results'}
+          </div>
+        )}
+        {isMomentumView && (
+          <div className="mt-1 text-sm text-muted-foreground">
+            Items you’ve chosen to keep moving forward next.
           </div>
         )}
         {normalizedQuery.length > 0 && (
@@ -1499,7 +1627,7 @@ export default function Home() {
           <div
             className={cn(
               'space-y-1.5 dark:space-y-2 relative',
-              viewState !== null
+              isMomentumViewActive || searchViewState !== null
                 ? isTagView
                   ? 'border-l-[6px] border-primary/80 pl-5'
                   : 'border-l-[6px] border-accent pl-5'
@@ -1515,7 +1643,8 @@ export default function Home() {
 
             // When a view is active, hierarchy is flattened for clarity.
             // Views are lenses, not structure.
-            const effectiveIndent = viewState !== null ? 0 : task.indent;
+            const effectiveIndent =
+              isMomentumViewActive || searchViewState !== null ? 0 : task.indent;
 
             return (
               <TaskRow
@@ -1528,6 +1657,7 @@ export default function Home() {
                 indentWidth={INDENT_WIDTH}
                 activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
                 onTagClick={handleTagSearchClick}
+                onToggleMomentum={() => toggleMomentum(task)}
                 rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
                 onFocusRow={() => setActiveTaskId(task.id)}
                 onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
@@ -1539,7 +1669,8 @@ export default function Home() {
                   handleRowKeyDownCapture(e, index, task)}
                 onPointerDown={(e: React.PointerEvent<HTMLDivElement>) =>
                   handlePointerDown(index, e)}
-                onToggle={() => toggleTask(task)}
+                onToggleCompleted={() => toggleCompleted(task)}
+                onDelete={() => deleteTask(task)}
                 isEditing={editingId === task.id}
                 editingText={editingId === task.id ? editingText : task.text}
                 editInputRef={editingId === task.id ? editInputRef : undefined}
@@ -1556,12 +1687,6 @@ export default function Home() {
                     };
                     setUndoAction({ type: 'edit', task });
                   }
-
-                  setAllTasks(prev =>
-                    prev.map(t =>
-                      t.id === task.id ? { ...t, text: value } : t
-                    )
-                  );
                 }}
                 onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
                   handleTextareaKeyDown(e, index, task)}
@@ -1576,7 +1701,6 @@ export default function Home() {
                   );
                 }}
                 searchQuery={normalizedQuery}
-                onDelete={() => archiveTask(task)}
               />
             );
           })}

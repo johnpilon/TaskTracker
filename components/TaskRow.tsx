@@ -14,6 +14,7 @@ interface TaskRowProps {
   indentWidth: number;
   activeTags?: string[];
   onTagClick?: unknown;
+  onToggleMomentum?: unknown;
   // NOTE: These are runtime-only callbacks/refs coming from the parent client component.
   // We intentionally type-erase them to satisfy Next.js "client boundary" serializable-props checks.
   rowRef: unknown;
@@ -21,7 +22,7 @@ interface TaskRowProps {
   onMouseDownRow: unknown;
   onKeyDownCapture: unknown;
   onPointerDown: unknown;
-  onToggle: unknown;
+  onToggleCompleted: unknown;
   isEditing: boolean;
   editingText: string;
   editInputRef?: unknown;
@@ -63,12 +64,13 @@ export default function TaskRow({
   indentWidth,
   activeTags,
   onTagClick,
+  onToggleMomentum,
   rowRef,
   onFocusRow,
   onMouseDownRow,
   onKeyDownCapture,
   onPointerDown,
-  onToggle,
+  onToggleCompleted,
   isEditing,
   editingText,
   editInputRef,
@@ -134,6 +136,11 @@ export default function TaskRow({
 
   // Tags are entry points into tag views via search-as-lens.
   // Clicking a tag simply populates the search query.
+  const handleToggleMomentum = () => {
+    if (!onToggleMomentum) return;
+    (onToggleMomentum as any)();
+  };
+
   const handleTagClick = (tag: string) => {
     if (!onTagClick) return;
     (onTagClick as any)(tag);
@@ -161,7 +168,7 @@ export default function TaskRow({
       onMouseDown={onMouseDownRow as any}
       onKeyDownCapture={onKeyDownCapture as any}
       className={cn(
-        'group relative flex items-start gap-3 rounded-lg px-4 py-3 focus:outline-none',
+        'group relative flex items-start gap-1.5 rounded-lg px-2 py-2.5 focus:outline-none',
         // Elevation: page < panel < card
         'bg-card dark:bg-secondary border border-border/60 dark:border-transparent',
         'hover:border-border/80 dark:hover:border-transparent',
@@ -194,9 +201,41 @@ export default function TaskRow({
       <input
         type="checkbox"
         checked={task.completed}
-        onChange={onToggle as any}
-        className="h-5 w-5 accent-muted-foreground self-start mt-[2px]"
+        onChange={onToggleCompleted as any}
+        className="h-4 w-4 accent-muted-foreground self-start mt-[3px]"
       />
+
+      {/* Momentum: fixed-width status slot (↝) so rows don’t shift when momentum toggles */}
+      <div className="w-6 self-start mt-[3px] flex items-center justify-center">
+        <button
+          type="button"
+          aria-label={task.momentum === true ? 'Remove Momentum' : 'Add Momentum'}
+          title="Momentum item"
+          onMouseDown={e => {
+            e.stopPropagation();
+          }}
+          onClick={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleToggleMomentum();
+          }}
+          className={cn(
+            'inline-flex h-4 w-4 items-center justify-center rounded',
+            'border transition-colors select-none touch-manipulation',
+            task.momentum === true
+              ? 'opacity-100 pointer-events-auto border-ring/40 bg-accent/25 text-primary/90'
+              : cn(
+                  // Hidden by default; appears on row hover (desktop) and always on touch.
+                  'opacity-0 pointer-events-none',
+                  'group-hover:opacity-100 group-hover:pointer-events-auto',
+                  '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
+                  'border-border/50 bg-muted/10 text-muted-foreground/70 hover:text-foreground hover:bg-accent/20'
+                )
+          )}
+        >
+          <span className="text-[13px] leading-none font-semibold">↝</span>
+        </button>
+      </div>
 
       <div className="flex-1 min-w-0 grid">
         <textarea
@@ -208,11 +247,15 @@ export default function TaskRow({
           onChange={isEditing ? handleChange : undefined}
           onKeyDown={isEditing ? (onTextareaKeyDown as any) : undefined}
           onBlur={isEditing ? (onTextareaBlur as any) : undefined}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           className={cn(
             'col-start-1 row-start-1',
-            'w-full resize-none overflow-hidden bg-transparent text-lg p-0 m-0',
+            'w-full resize-none overflow-hidden bg-transparent text-base p-0 m-0',
             'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-            'leading-[1.4]',
+            'leading-[1.35]',
             'focus:outline-none',
             isEditing
               ? 'pointer-events-auto opacity-100 min-h-[1.4em]'
@@ -234,9 +277,9 @@ export default function TaskRow({
                 (onTextClick as any)(e);
               }}
               className={cn(
-              'col-start-1 row-start-1 text-lg font-medium cursor-text block w-full',
+              'col-start-1 row-start-1 text-base font-normal cursor-text block w-full',
                 'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-                'leading-[1.4] min-h-[1.4em]',
+                'leading-[1.35] min-h-[1.35em]',
                 completedClass
               )}
             >
@@ -284,14 +327,25 @@ export default function TaskRow({
         )}
       </div>
 
+      {/* Delete */}
       <button
         onClick={onDelete as any}
-        aria-label="Archive task"
+        aria-label="Delete task"
         type="button"
-        className="opacity-0 group-hover:opacity-100 text-destructive
-                   inline-flex h-9 w-9 items-center justify-center rounded-full
-                   border-[3px] border-destructive/80 bg-destructive/12 shadow-sm
-                   transition-colors hover:bg-destructive/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          'inline-flex h-9 w-9 items-center justify-center rounded-full',
+          'border-[3px] shadow-sm',
+          'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          // Reduce visual weight at rest; red emphasis only on hover.
+          'border-muted-foreground/45 bg-muted/10 text-muted-foreground/80',
+          'hover:border-destructive/80 hover:bg-destructive/12 hover:text-destructive',
+          // Only appear on hover (desktop), always visible on touch.
+          'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100'
+        )}
+        onMouseDown={e => {
+          // prevent row selection shift
+          e.stopPropagation();
+        }}
       >
         <span className="text-xl leading-none font-semibold" aria-hidden>
           ×

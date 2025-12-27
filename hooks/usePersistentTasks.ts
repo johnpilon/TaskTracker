@@ -36,7 +36,13 @@ const sortTasks = (list: Task[]): Task[] => {
   none.sort(byOrder);
 
   // Archived tasks kept at the end, stable by archivedAt (fallback to order).
-  archived.sort((a, b) => (a.archivedAt ?? a.order) - (b.archivedAt ?? b.order));
+  const archivedSortKey = (t: Task) => {
+    const iso = t.archivedAt;
+    const parsed =
+      typeof iso === 'string' ? Date.parse(iso) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : t.order;
+  };
+  archived.sort((a, b) => archivedSortKey(a) - archivedSortKey(b));
 
   return [...now, ...soon, ...later, ...none, ...archived];
 };
@@ -52,7 +58,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const normalizeTask = (value: unknown): Task | null => {
   if (!isPlainObject(value)) return null;
 
-  const { id, text, completed, indent, createdAt, tags, meta, intent, order, archived, completedAt, archivedAt } =
+  const { id, text, completed, indent, createdAt, tags, meta, intent, order, archived, completedAt, archivedAt, momentum } =
     value;
 
   if (typeof id !== 'string' || typeof text !== 'string') return null;
@@ -80,17 +86,32 @@ const normalizeTask = (value: unknown): Task | null => {
         ? safeCreatedAt
         : undefined;
 
-  const safeArchivedAt =
-    safeArchived && typeof archivedAt === 'number' && Number.isFinite(archivedAt)
-      ? Math.trunc(archivedAt)
-      : safeArchived
-        ? safeCreatedAt
-        : undefined;
+  const safeArchivedAt = (() => {
+    // `archivedAt` is an ISO string timestamp in the current model.
+    // Older payloads may store a number (ms).
+    if (typeof archivedAt === 'string') {
+      const t = Date.parse(archivedAt);
+      return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+    }
+    if (typeof archivedAt === 'number' && Number.isFinite(archivedAt)) {
+      return new Date(Math.trunc(archivedAt)).toISOString();
+    }
+    // If archived but missing timestamp, backfill from createdAt for deterministic behavior.
+    if (safeArchived) return new Date(safeCreatedAt).toISOString();
+    return undefined;
+  })();
   const indentNumber =
     typeof indent === 'number' && Number.isFinite(indent) ? indent : 0;
   const safeIndent = Math.max(0, Math.min(MAX_INDENT, Math.trunc(indentNumber)));
   const safeTags =
     Array.isArray(tags) && tags.every(t => typeof t === 'string') ? tags : [];
+
+  // Momentum is a boolean state.
+  // Migration: legacy "focus" was represented as intent === 'now'.
+  const safeMomentum =
+    typeof momentum === 'boolean'
+      ? momentum
+      : safeIntent === 'now';
 
   let safeMeta: Task['meta'] | undefined;
   if (isPlainObject(meta)) {
@@ -112,6 +133,7 @@ const normalizeTask = (value: unknown): Task | null => {
     indent: safeIndent,
     tags: safeTags,
     ...(safeIntent ? { intent: safeIntent } : {}),
+    momentum: safeMomentum,
     ...(safeMeta ? { meta: safeMeta } : {}),
   };
 };
@@ -212,7 +234,7 @@ export default function usePersistentTasks(): [
       const next = typeof updater === 'function' ? (updater as any)(prev) : updater;
       // Reindex order to preserve manual ordering across updates.
       const reindexed = (next as Task[]).map((t: Task, idx: number) =>
-        t.archived ? t : { ...t, order: idx }
+        t.archived || t.completed ? t : { ...t, order: idx }
       );
       return sortTasks(reindexed);
     });
