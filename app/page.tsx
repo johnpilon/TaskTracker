@@ -58,6 +58,7 @@ type UndoAction =
 const MAX_INDENT = 2;
 const INDENT_WIDTH = 28;
 const UI_STATE_KEY = 'task_ui_state';
+const NEW_TASK_ROW_ID = '__new__';
 
 /* =======================
    Page
@@ -66,12 +67,11 @@ const UI_STATE_KEY = 'task_ui_state';
 export default function Home() {
   const [allTasks, setAllTasks] = usePersistentTasks();
   const tasks = allTasks.filter(t => !t.archived);
-  const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [recentViews, setRecentViews] = useState<string[]>([]);
   const [isMomentumViewActive, setIsMomentumViewActive] = useState(false);
 
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string>(NEW_TASK_ROW_ID);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -88,9 +88,9 @@ export default function Home() {
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const newRowRef = useRef<HTMLDivElement | null>(null);
 
   const pendingFocusRef = useRef<
     | { taskId: string; mode: 'row' | 'edit'; caret?: number }
@@ -133,6 +133,8 @@ export default function Home() {
 
   const computeTags = (text: string) => parseTaskMeta(text).tags;
   const searchOverlayInnerRef = useRef<HTMLDivElement | null>(null);
+
+  const isEditingNewRow = editingId === NEW_TASK_ROW_ID;
 
   const extractCommittedTagsFromDraft = (
     value: string,
@@ -440,7 +442,11 @@ export default function Home() {
 
   useEffect(() => {
     if (restoringUIRef.current) return;
-    inputRef.current?.focus();
+    // Default focus target is the capture row at the top.
+    // This allows immediate typing without hunting for a special input.
+    requestAnimationFrame(() => {
+      newRowRef.current?.focus();
+    });
   }, []);
 
   useLayoutEffect(() => {
@@ -484,13 +490,10 @@ export default function Home() {
   }, [editingId]);
 
   useEffect(() => {
-    if (tasks.length === 0) {
-      if (activeTaskId !== null) setActiveTaskId(null);
-      return;
-    }
-
-    if (activeTaskId === null || !tasks.some(t => t.id === activeTaskId)) {
-      setActiveTaskId(tasks[0].id);
+    // The persistent capture row is always present.
+    // Keep it as the default active row unless the user activates a specific task.
+    if (activeTaskId !== NEW_TASK_ROW_ID && !tasks.some(t => t.id === activeTaskId)) {
+      setActiveTaskId(NEW_TASK_ROW_ID);
     }
   }, [tasks, activeTaskId]);
 
@@ -608,8 +611,14 @@ export default function Home() {
           e.preventDefault();
 
           const currentIndex =
-            activeTaskId === null ? 0 : tasks.findIndex(t => t.id === activeTaskId);
-          const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+            activeTaskId === NEW_TASK_ROW_ID
+              ? -1
+              : tasks.findIndex(t => t.id === activeTaskId);
+
+          // When the capture row is active, ArrowUp should keep you there.
+          if (currentIndex === -1 && e.key === 'ArrowUp') return;
+
+          const safeIndex = currentIndex >= 0 ? currentIndex : -1;
           const nextIndex =
             e.key === 'ArrowDown'
               ? Math.min(tasks.length - 1, safeIndex + 1)
@@ -728,24 +737,26 @@ export default function Home() {
      Task Actions
   ======================= */
 
-  const addTask = () => {
-    if (!input.trim()) return;
+  const commitNewTaskFromRow = () => {
+    const raw = editingText;
+    const parsed = parseTaskInput(raw);
 
-    const parsed = parseTaskInput(input.trim());
-    const text = parsed.text;
+    // Require at least text or tags.
+    if (parsed.text.length === 0 && parsed.tags.length === 0) return;
 
     const now = Date.now();
+    const id = createId();
+
     setAllTasks(prev => [
       {
-        id: now.toString(),
-        text,
+        id,
+        text: parsed.text,
         createdAt: now,
         order: now,
         completed: false,
         archived: false,
         indent: 0,
         tags: parsed.tags,
-        // New tasks must be highest-visibility; default to 'now' unless explicitly set.
         ...(parsed.intent ? { intent: parsed.intent } : { intent: 'now' }),
         momentum: parsed.momentum === true,
         meta: { tags: parsed.tags },
@@ -753,8 +764,20 @@ export default function Home() {
       ...prev,
     ]);
 
-    setInput('');
-    inputRef.current?.focus();
+    // Keep capture row active + ready for the next thought.
+    setActiveTaskId(NEW_TASK_ROW_ID);
+    setEditingId(NEW_TASK_ROW_ID);
+    setEditingText('');
+    setCaretPos(0);
+    caretInitializedRef.current = false;
+  };
+
+  const cancelNewRowEdit = () => {
+    if (editingId !== NEW_TASK_ROW_ID) return;
+    setEditingId(null);
+    setEditingText('');
+    setCaretPos(null);
+    caretInitializedRef.current = false;
   };
 
   const toggleCompleted = (task: Task) => {
@@ -1736,10 +1759,130 @@ export default function Home() {
             role="list"
             ref={listRef}
           >
+          {/* Persistent empty capture row (top-anchored) */}
+          <TaskRow
+            task={{
+              id: NEW_TASK_ROW_ID,
+              text: '',
+              createdAt: 0,
+              order: 0,
+              completed: false,
+              archived: false,
+              indent: 0,
+              tags: [],
+              momentum: false,
+              meta: { tags: [] },
+            }}
+            index={-1}
+            isActive={activeTaskId === NEW_TASK_ROW_ID}
+            dragIndex={dragIndex}
+            effectiveIndent={0}
+            indentWidth={INDENT_WIDTH}
+            activeTags={undefined}
+            onTagClick={undefined}
+            onRemoveTag={undefined}
+            onToggleMomentum={undefined}
+            rowRef={(el: HTMLDivElement | null) => {
+              newRowRef.current = el;
+            }}
+            onFocusRow={() => setActiveTaskId(NEW_TASK_ROW_ID)}
+            onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
+              const t = e.target as HTMLElement | null;
+              if (t?.closest('[data-no-edit],input,textarea,button')) return;
+
+              // Commit any in-progress edit before entering capture mode.
+              commitActiveEditIfAny();
+              setActiveTaskId(NEW_TASK_ROW_ID);
+
+              if (editingId !== NEW_TASK_ROW_ID) {
+                setEditingId(NEW_TASK_ROW_ID);
+                setEditingText('');
+                setCaretPos(0);
+                caretInitializedRef.current = false;
+              }
+            }}
+            onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) => {
+              const target = e.target as HTMLElement | null;
+              if (editingId === NEW_TASK_ROW_ID && target?.tagName === 'TEXTAREA') return;
+
+              // ArrowDown from the capture row jumps into the first task (if any).
+              if (e.key === 'ArrowDown' && tasks.length > 0) {
+                e.preventDefault();
+                const first = tasks[0];
+                setActiveTaskId(first.id);
+                startEditing(first, first.text.length);
+                return;
+              }
+
+              // Escape on empty row does nothing.
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                return;
+              }
+
+              // Typing starts editing immediately.
+              if (
+                e.key.length === 1 &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.altKey
+              ) {
+                e.preventDefault();
+                setActiveTaskId(NEW_TASK_ROW_ID);
+                setEditingId(NEW_TASK_ROW_ID);
+                setEditingText(e.key);
+                setCaretPos(1);
+                caretInitializedRef.current = false;
+                return;
+              }
+            }}
+            onPointerDown={(e: React.PointerEvent<HTMLDivElement>) => {
+              // Capture row is not draggable.
+              e.preventDefault();
+            }}
+            onToggleCompleted={() => {
+              // Capture row cannot be completed.
+            }}
+            onDelete={() => {
+              // Capture row cannot be deleted.
+            }}
+            isEditing={editingId === NEW_TASK_ROW_ID}
+            editingText={editingId === NEW_TASK_ROW_ID ? editingText : ''}
+            editInputRef={editingId === NEW_TASK_ROW_ID ? editInputRef : undefined}
+            onChangeEditingText={(value: string) => {
+              setEditingText(value);
+              const caret = editInputRef.current?.selectionStart ?? null;
+              if (typeof caret === 'number') {
+                setCaretPos(caret);
+              }
+            }}
+            onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitNewTaskFromRow();
+              }
+              // Escape does nothing on empty row.
+              if (e.key === 'Escape') {
+                e.preventDefault();
+              }
+            }}
+            onTextareaBlur={() => {
+              // Leaving the capture row without committing should leave it empty.
+              cancelNewRowEdit();
+            }}
+            onTextClick={() => {
+              commitActiveEditIfAny();
+              setActiveTaskId(NEW_TASK_ROW_ID);
+              setEditingId(NEW_TASK_ROW_ID);
+              setEditingText('');
+              setCaretPos(0);
+              caretInitializedRef.current = false;
+            }}
+            searchQuery={normalizedQuery}
+          />
+
           {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
-            const isActive =
-              activeTaskId === task.id ||
-              (activeTaskId === null && visibleIndex === 0);
+            const isActive = activeTaskId === task.id;
 
             // When a view is active, hierarchy is flattened for clarity.
             // Views are lenses, not structure.
@@ -1816,45 +1959,6 @@ export default function Home() {
               />
             );
           })}
-
-          {/* Persistent entry row (Google Keep-like) */}
-          <div
-            className={cn(
-              'group relative flex items-start gap-1.5 px-2 py-2',
-              'text-foreground'
-            )}
-          >
-            {/* Placeholder for drag handle */}
-            <div className="w-[12px] h-[16px] self-start mt-[2px] opacity-0" aria-hidden />
-            {/* Placeholder for checkbox */}
-            <div className="h-4 w-4 self-start mt-[3px] opacity-0" aria-hidden />
-            {/* Placeholder for Momentum status slot */}
-            <div className="w-6 self-start mt-[3px] opacity-0" aria-hidden />
-
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  addTask();
-                }
-              }}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              rows={1}
-              placeholder="Add a note…"
-              className={cn(
-                'flex-1 min-w-0',
-                'resize-none overflow-hidden bg-transparent',
-                'text-base leading-[1.35]',
-                'focus:outline-none'
-              )}
-            />
-          </div>
           </div>
         </div>
       </div>
