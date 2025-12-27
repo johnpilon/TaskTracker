@@ -152,17 +152,34 @@ export default function TaskRow({
 
   const visibleTitle = task.text.trim();
 
+  const autosizeTextarea = (el: HTMLTextAreaElement) => {
+    // Prevent the subtle "row jumps a few px on focus" effect:
+    // Some browsers report `scrollHeight` slightly larger than a single line even with 0 padding.
+    // We clamp small deltas so 1-line rows keep a stable baseline height, but still allow growth.
+    el.style.height = 'auto';
+
+    const cs = window.getComputedStyle(el);
+    const lineHeightPx = Number.parseFloat(cs.lineHeight);
+    const singleLine = Number.isFinite(lineHeightPx) ? Math.round(lineHeightPx) : 0;
+
+    const scroll = el.scrollHeight;
+    const next =
+      singleLine > 0 && scroll <= singleLine + 2
+        ? singleLine
+        : scroll;
+
+    el.style.height = `${next}px`;
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     (onChangeEditingText as any)(e.target.value);
-    e.currentTarget.style.height = 'auto';
-    e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+    autosizeTextarea(e.currentTarget);
   };
 
   useLayoutEffect(() => {
     const el = (editInputRef as any)?.current as HTMLTextAreaElement | null | undefined;
     if (!isEditing || !el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    autosizeTextarea(el);
   }, [isEditing, editingText, editInputRef]);
 
   return (
