@@ -241,9 +241,9 @@ export default function TaskRow({
       <div
         className={cn(
           'flex-1 min-w-0',
-          // For the entry row, preserve the same text start position as normal rows
-          // without rendering the controls themselves.
-          isEntryRow ? 'pl-[calc(1.25rem+1.25rem+1rem+0.25rem)]' : ''
+          // Entry row is an input surface (no controls), so text should start naturally at the left.
+          // We intentionally do NOT reserve space for handle/checkbox/momentum here.
+          ''
         )}
       >
         <div
