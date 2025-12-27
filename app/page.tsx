@@ -136,18 +136,19 @@ export default function Home() {
 
   const isEditingNewRow = editingId === NEW_TASK_ROW_ID;
 
-  const extractCommittedTagsFromDraft = (
+  const commitCompletedInlineTags = (
+    taskId: string,
     value: string,
     caret: number | null
-  ): { nextValue: string; extracted: string[]; nextCaret: number | null } => {
-    // "Immediate" commit here means: once a tag token is complete (terminated by whitespace),
-    // we commit it into task.tags[] and remove it from the edit buffer so it doesn’t remain inline.
+  ): { nextValue: string; nextCaret: number | null; committed: string[] } => {
+    // Commit ONLY completed tag tokens (terminated by whitespace) into task.tags[],
+    // and strip them from the editable text.
     //
-    // We intentionally DO NOT commit a trailing `#tag` at end-of-string until blur/save to
-    // avoid committing partial tags while the user is still typing.
+    // NOTE: We purposely do NOT scan/commit on every keystroke; callers should invoke
+    // this only when the user inserts whitespace or on explicit commit (blur/save).
     const TAG_TOKEN_TERMINATED_BY_SPACE = /(^|\s)#([a-zA-Z0-9_-]+)(?=\s)/g;
 
-    const extracted: string[] = [];
+    const committed: string[] = [];
     let nextCaret = caret;
 
     let out = '';
@@ -156,22 +157,18 @@ export default function Home() {
     while ((match = TAG_TOKEN_TERMINATED_BY_SPACE.exec(value))) {
       const leading = match[1] ?? '';
       const tag = match[2] ?? '';
-      const fullStart = match.index; // includes leading (space or start)
+      const fullStart = match.index;
       const tokenStart = fullStart + leading.length;
-      const tokenEnd = tokenStart + 1 + tag.length; // "#"+tag
+      const tokenEnd = tokenStart + 1 + tag.length;
 
       out += value.slice(lastIndex, fullStart);
-      // Preserve exactly the original leading whitespace (if any) so we don’t
-      // accidentally introduce new spaces/newlines while the user types.
       out += leading;
-
       lastIndex = tokenEnd;
 
-      const normalized = tag.toLowerCase();
-      if (normalized) extracted.push(normalized);
+      const normalized = String(tag).toLowerCase();
+      if (normalized) committed.push(normalized);
 
       if (typeof nextCaret === 'number' && tokenEnd <= nextCaret) {
-        // We replaced "#tag" with '' (but kept leading space if present), so caret moves left.
         const removedLen = tokenEnd - fullStart;
         const addedLen = leading.length;
         nextCaret = Math.max(0, nextCaret - (removedLen - addedLen));
@@ -179,31 +176,28 @@ export default function Home() {
     }
 
     if (lastIndex === 0) {
-      return { nextValue: value, extracted: [], nextCaret };
+      return { nextValue: value, nextCaret, committed: [] };
     }
 
     out += value.slice(lastIndex);
-    // Keep line breaks intact while preventing runaway double-spaces from repeated tag commits.
     const nextValue = out.replace(/[ \t]{2,}/g, ' ');
     if (typeof nextCaret === 'number') {
       nextCaret = Math.min(nextValue.length, nextCaret);
     }
-    return { nextValue, extracted: Array.from(new Set(extracted)), nextCaret };
-  };
 
-  const mergeTagsIntoTask = (taskId: string, tags: string[]) => {
-    if (tags.length === 0) return;
-    setAllTasks(prev =>
-      prev.map(t => {
-        if (t.id !== taskId) return t;
-        const merged = Array.from(new Set([...(t.tags ?? []), ...tags.map(x => x.toLowerCase())]));
-        return {
-          ...t,
-          tags: merged,
-          meta: { tags: merged },
-        };
-      })
-    );
+    if (committed.length > 0) {
+      setAllTasks(prev =>
+        prev.map(t => {
+          if (t.id !== taskId) return t;
+          const merged = Array.from(
+            new Set([...(t.tags ?? []), ...committed.map(x => x.toLowerCase())])
+          );
+          return { ...t, tags: merged, meta: { tags: merged } };
+        })
+      );
+    }
+
+    return { nextValue, nextCaret, committed: Array.from(new Set(committed)) };
   };
 
   const MAX_RECENT_VIEWS = 8;
@@ -834,16 +828,11 @@ export default function Home() {
         ? editingOriginalRef.current.snapshot
         : task;
 
+    // Tags are canonical state and are NOT derived from text.
+    // However, if the user typed new `#tags` in the editor, commit them now (and strip from text).
     const parsed = parseTaskInput(editingText);
-    const nextTags = parsed.tags;
-
-    const prevTags = originalSnapshot.tags ?? [];
-    const tagsChanged =
-      prevTags.length !== nextTags.length ||
-      prevTags.some((t, i) => t !== nextTags[i]);
-
     const textChanged = parsed.text !== originalSnapshot.text;
-    const shouldCommit = textChanged || tagsChanged || parsed.intent !== undefined;
+    const shouldCommit = textChanged || parsed.intent !== undefined || parsed.momentum === true;
 
     if (shouldCommit) {
       setUndoAction({ type: 'edit', task: originalSnapshot });
@@ -890,8 +879,8 @@ export default function Home() {
     const before = editingText.slice(0, cursor);
     const after = editingText.slice(cursor);
 
-    // IMPORTANT: tags must always be derived from text.
-    // Never copy tags between tasks.
+    // Tags are canonical state and are NOT derived from text.
+    // Split affects text only; tags stay on the original (left) task unless explicitly removed.
     const leftParsed = parseTaskInput(before);
     const rightParsed = parseTaskInput(after);
     const originalParsed = parseTaskInput(editingText);
@@ -900,16 +889,7 @@ export default function Home() {
     const rightText = rightParsed.text;
     const originalText = originalParsed.text;
 
-    const leftMetaTags = leftParsed.tags;
-    const rightMetaTags = rightParsed.tags;
-    const originalMetaTags = originalParsed.tags;
-
-    console.group('SPLIT DEBUG');
-    console.log('Left text:', leftText);
-    console.log('Left tags:', leftMetaTags);
-    console.log('Right text:', rightText);
-    console.log('Right tags:', rightMetaTags);
-    console.groupEnd();
+    const originalTags = task.tags ?? [];
 
     // Undo should restore the original row and caret position, and remove the created row.
     setUndoAction({
@@ -917,9 +897,9 @@ export default function Home() {
       original: {
         ...task,
         text: originalText,
-        tags: originalMetaTags,
+        tags: originalTags,
         ...(originalParsed.intent ? { intent: originalParsed.intent } : { intent: undefined }),
-        meta: { tags: originalMetaTags },
+        meta: { tags: originalTags },
       },
       createdId,
       cursor,
@@ -936,10 +916,10 @@ export default function Home() {
       next[safeIndex] = {
         ...current,
         text: leftText,
-        tags: leftMetaTags,
+        tags: originalTags,
         ...(leftParsed.intent ? { intent: leftParsed.intent } : { intent: undefined }),
         ...(leftParsed.momentum ? { momentum: true } : {}),
-        meta: { tags: leftMetaTags },
+        meta: { tags: originalTags },
       };
       const newTask: Task = {
         id: createdId,
@@ -949,10 +929,10 @@ export default function Home() {
         completed: false,
         archived: false,
         indent: current.indent,
-        tags: rightMetaTags,
+        tags: [],
         ...(rightParsed.intent ? { intent: rightParsed.intent } : {}),
         momentum: rightParsed.momentum === true,
-        meta: { tags: rightMetaTags },
+        meta: { tags: [] },
       };
       next.splice(safeIndex + 1, 0, newTask);
 
@@ -990,7 +970,10 @@ export default function Home() {
       const mergedRaw = prev.text + editingText;
       const parsed = parseTaskInput(mergedRaw);
       const merged = parsed.text;
-      const mergedTags = parsed.tags;
+      // Tags are canonical: merging rows merges tag sets (union), never derived from text.
+      const mergedTags = Array.from(
+        new Set([...(prev.tags ?? []), ...(task.tags ?? []), ...parsed.tags])
+      );
       const mergedIntent = parsed.intent ?? prev.intent;
 
       setUndoAction({
@@ -1076,7 +1059,9 @@ export default function Home() {
       const mergedRaw = editingText + nextTask.text;
       const parsed = parseTaskInput(mergedRaw);
       const merged = parsed.text;
-      const mergedTags = parsed.tags;
+      const mergedTags = Array.from(
+        new Set([...(task.tags ?? []), ...(nextTask.tags ?? []), ...parsed.tags])
+      );
       const mergedIntent = parsed.intent ?? task.intent;
 
       setUndoAction({
@@ -1936,19 +1921,35 @@ export default function Home() {
                     setUndoAction({ type: 'edit', task });
                   }
 
-                  const caret = editInputRef.current?.selectionStart ?? null;
-                  const extracted = extractCommittedTagsFromDraft(value, caret);
-                  if (extracted.extracted.length > 0) {
-                    mergeTagsIntoTask(task.id, extracted.extracted);
+                  // Tag commit is canonical and must never delete tags.
+                  // To avoid re-parsing tags on every keystroke, only scan/commit when the user
+                  // inserts whitespace (space/tab/newline) or on explicit commit (blur/save).
+                  const el = editInputRef.current;
+                  const caret = el?.selectionStart ?? null;
+
+                  const prevValue = editingText;
+                  const delta = value.length - prevValue.length;
+                  const shouldScan =
+                    delta > 0 &&
+                    typeof caret === 'number' &&
+                    (() => {
+                      const start = Math.max(0, caret - delta);
+                      const inserted = value.slice(start, caret);
+                      return /\s/.test(inserted);
+                    })();
+
+                  if (shouldScan && value.includes('#')) {
+                    const res = commitCompletedInlineTags(task.id, value, caret);
+                    setEditingText(res.nextValue);
+                    if (typeof res.nextCaret === 'number') {
+                      setCaretPos(res.nextCaret);
+                      caretInitializedRef.current = false;
+                    }
+                    return;
                   }
 
-                  // Keep the visible edit buffer free of committed tags so inline tags do not persist.
-                  // Tag-only rows remain visually non-blank via textarea placeholder + the tag row.
-                  setEditingText(extracted.nextValue);
-                  if (typeof extracted.nextCaret === 'number') {
-                    setCaretPos(extracted.nextCaret);
-                    caretInitializedRef.current = false;
-                  }
+                  setEditingText(value);
+                  if (typeof caret === 'number') setCaretPos(caret);
                 }}
                 onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
                   handleTextareaKeyDown(e, index, task)}

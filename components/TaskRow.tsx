@@ -81,6 +81,17 @@ export default function TaskRow({
         'ring-1 ring-muted-foreground/20 hover:ring-muted-foreground/30 cursor-text'
       : '';
 
+  const isTagsOnlyRow = !isEntryRow && task.text.trim().length === 0 && (task.tags?.length ?? 0) > 0;
+  const hasNonTagTextWhileEditing = (() => {
+    if (!isEditing) return false;
+    // Inline placeholder tags remain visible until the first non-tag character is typed.
+    // Strip tag tokens + whitespace; if anything remains, the user has entered non-tag text.
+    const stripped = editingText
+      .replace(/(^|\s)#[a-zA-Z0-9_-]+/g, ' ')
+      .replace(/\s+/g, '');
+    return stripped.length > 0;
+  })();
+
   // Active tag emphasis is semantic (token-based), not substring search-based.
   const renderTextWithActiveTags = (text: string) => {
     const active = new Set((activeTags ?? []).map(t => t.toLowerCase()));
@@ -305,34 +316,44 @@ export default function TaskRow({
           )}
 
           {isEditing ? (
-            <textarea
-              ref={editInputRef as any}
-              value={editingText}
-              rows={1}
-              onChange={handleChange}
-              onKeyDown={onTextareaKeyDown as any}
-              onBlur={onTextareaBlur as any}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              placeholder={
-                visibleTitle.length === 0 && (task.tags?.length ?? 0) > 0
-                  ? task.tags!.map(t => `#${t}`).join(' ')
-                  : undefined
-              }
-              className={cn(
-                'flex-1 min-w-0',
-                'resize-none overflow-hidden bg-transparent',
-                'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-                'leading-[1.32]',
-                // Tag-only rows: show tags as very light “ghost” text, but hide it immediately on focus
-                // so it never looks like you’re typing over real content.
-                'focus:outline-none placeholder:text-muted-foreground/25 focus:placeholder:text-transparent',
-                completedClass
+            <div className="relative flex-1 min-w-0">
+              {/* Tag-only rows: render committed tags inline as a visual placeholder (display-only). */}
+              {isTagsOnlyRow && !hasNonTagTextWhileEditing && (task.tags?.length ?? 0) > 0 && (
+                <div
+                  aria-hidden
+                  className={cn(
+                    'pointer-events-none absolute inset-0',
+                    'whitespace-pre-wrap break-words overflow-wrap-anywhere',
+                    'leading-[1.32]',
+                    'text-muted-foreground/35',
+                    'text-[0.92em]'
+                  )}
+                >
+                  {task.tags!.map(t => `#${t}`).join(' ')}
+                </div>
               )}
-              style={{ caretColor: 'hsl(var(--foreground))' }}
-            />
+              <textarea
+                ref={editInputRef as any}
+                value={editingText}
+                rows={1}
+                onChange={handleChange}
+                onKeyDown={onTextareaKeyDown as any}
+                onBlur={onTextareaBlur as any}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                className={cn(
+                  'flex-1 min-w-0 w-full',
+                  'resize-none overflow-hidden bg-transparent',
+                  'whitespace-pre-wrap break-words overflow-wrap-anywhere',
+                  'leading-[1.32]',
+                  'focus:outline-none',
+                  completedClass
+                )}
+                style={{ caretColor: 'hsl(var(--foreground))' }}
+              />
+            </div>
           ) : (
             <div
               onMouseDown={e => {
@@ -353,7 +374,7 @@ export default function TaskRow({
                 : // If the row only has tags, render them as a subdued "title" so it isn't an empty line.
                 task.tags && task.tags.length > 0
                   ? (
-                      <span className="text-muted-foreground/35">
+                      <span className="text-muted-foreground/35 text-[0.92em]">
                         {task.tags.map(t => `#${t}`).join(' ')}
                       </span>
                     )
@@ -375,7 +396,8 @@ export default function TaskRow({
             className={cn(
               visibleTitle.length === 0 ? 'mt-0' : 'mt-0.5',
               'text-[10px] leading-[1.0]',
-              'text-muted-foreground/45',
+              // Muted blue, lower priority than task text but clearly clickable.
+              'text-primary/45',
               'whitespace-nowrap overflow-hidden text-ellipsis',
               ''
             )}
@@ -389,7 +411,7 @@ export default function TaskRow({
                     className={cn(
                       'p-0 m-0 bg-transparent border-0',
                       'cursor-pointer text-inherit',
-                      'hover:text-muted-foreground/60 hover:underline underline-offset-2',
+                      'hover:text-primary/60 hover:underline underline-offset-2',
                       'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
                     )}
                     data-no-edit
