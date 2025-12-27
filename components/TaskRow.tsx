@@ -67,7 +67,11 @@ export default function TaskRow({
   onDelete,
 }: TaskRowProps) {
   const internalRowRef = useRef<HTMLDivElement | null>(null);
-  const lastLoggedRef = useRef<{ isEditing: boolean; height: number } | null>(null);
+  const lastLoggedRef = useRef<{ isEditing: boolean; isActive: boolean; height: number } | null>(null);
+
+  // Strict layout invariant: use a *pixel* line-height so inline font-size changes
+  // (e.g. tag-only placeholder smaller text) cannot change computed line box height.
+  const ROW_LINE_HEIGHT_PX = 21.12;
 
   const completedClass = task.completed
     ? 'text-muted-foreground line-through'
@@ -162,9 +166,7 @@ export default function TaskRow({
     // Only apply an explicit height when content truly needs multiple lines.
     el.style.height = 'auto';
 
-    const cs = window.getComputedStyle(el);
-    const lineHeightPx = Number.parseFloat(cs.lineHeight);
-    const baseline = Number.isFinite(lineHeightPx) ? lineHeightPx : 0;
+    const baseline = ROW_LINE_HEIGHT_PX;
     const scroll = el.scrollHeight;
 
     if (baseline > 0 && scroll <= baseline + 2) {
@@ -193,14 +195,14 @@ export default function TaskRow({
     if (!el) return;
     const h = el.getBoundingClientRect().height;
     const prev = lastLoggedRef.current;
-    if (!prev || prev.isEditing !== isEditing) {
+    if (!prev || prev.isEditing !== isEditing || prev.isActive !== isActive) {
       // Verification: inactive vs active row height should be identical.
       // Compare logs for the same task id across state transitions.
       // eslint-disable-next-line no-console
-      console.log('[RowHeight]', { id: task.id, isEditing, height: h });
-      lastLoggedRef.current = { isEditing, height: h };
+      console.log('[RowHeight]', { id: task.id, isActive, isEditing, height: h });
+      lastLoggedRef.current = { isEditing, isActive, height: h };
     }
-  }, [isEditing, task.id]);
+  }, [isEditing, isActive, task.id]);
 
   return (
     <div
@@ -298,7 +300,7 @@ export default function TaskRow({
             'text-base font-normal w-full min-w-0',
             'flex items-center gap-1',
             isEditing ? 'overflow-visible' : 'whitespace-nowrap overflow-hidden',
-            'leading-[1.32] min-h-[1.32em]',
+            `leading-[${ROW_LINE_HEIGHT_PX}px] min-h-[${ROW_LINE_HEIGHT_PX}px]`,
             // Tag-only rows should read as subdued metadata (display mode only).
             !isEditing && visibleTitle.length === 0 ? 'text-muted-foreground/55' : '',
             completedClass
@@ -370,9 +372,9 @@ export default function TaskRow({
                   'p-0 m-0 border-0 outline-none appearance-none',
                   'resize-none overflow-hidden bg-transparent',
                   'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-                  'leading-[1.32]',
+                  `leading-[${ROW_LINE_HEIGHT_PX}px]`,
                   // Match the display-line baseline so the tag row doesn't shift on focus.
-                  'h-[1.32em] min-h-[1.32em]',
+                  `h-[${ROW_LINE_HEIGHT_PX}px] min-h-[${ROW_LINE_HEIGHT_PX}px]`,
                   'focus:outline-none',
                   completedClass
                 )}
