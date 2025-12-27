@@ -831,8 +831,11 @@ export default function Home() {
     // Tags are canonical state and are NOT derived from text.
     // However, if the user typed new `#tags` in the editor, commit them now (and strip from text).
     const parsed = parseTaskInput(editingText);
+    const existingTags = new Set((originalSnapshot.tags ?? []).map(t => t.toLowerCase()));
+    const addedTags = parsed.tags.filter(t => !existingTags.has(t.toLowerCase()));
     const textChanged = parsed.text !== originalSnapshot.text;
-    const shouldCommit = textChanged || parsed.intent !== undefined || parsed.momentum === true;
+    const shouldCommit =
+      textChanged || addedTags.length > 0 || parsed.intent !== undefined || parsed.momentum === true;
 
     if (shouldCommit) {
       setUndoAction({ type: 'edit', task: originalSnapshot });
@@ -889,7 +892,9 @@ export default function Home() {
     const rightText = rightParsed.text;
     const originalText = originalParsed.text;
 
-    const originalTags = task.tags ?? [];
+    // If the user typed new tags in this edit session and presses Enter (split),
+    // those tags must be committed to the canonical tag state (left/original row).
+    const originalTags = Array.from(new Set([...(task.tags ?? []), ...originalParsed.tags]));
 
     // Undo should restore the original row and caret position, and remove the created row.
     setUndoAction({
