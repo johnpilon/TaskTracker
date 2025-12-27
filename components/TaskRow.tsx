@@ -81,16 +81,10 @@ export default function TaskRow({
         'ring-1 ring-muted-foreground/20 hover:ring-muted-foreground/30 cursor-text'
       : '';
 
-  const isTagsOnlyRow = !isEntryRow && task.text.trim().length === 0 && (task.tags?.length ?? 0) > 0;
-  const hasNonTagTextWhileEditing = (() => {
-    if (!isEditing) return false;
-    // Inline placeholder tags remain visible until the first non-tag character is typed.
-    // Strip tag tokens + whitespace; if anything remains, the user has entered non-tag text.
-    const stripped = editingText
-      .replace(/(^|\s)#[a-zA-Z0-9_-]+/g, ' ')
-      .replace(/\s+/g, '');
-    return stripped.length > 0;
-  })();
+  const isTagsOnlyRow =
+    !isEntryRow &&
+    task.text.trim().length === 0 &&
+    (task.tags?.length ?? 0) > 0;
 
   // Active tag emphasis is semantic (token-based), not substring search-based.
   const renderTextWithActiveTags = (text: string) => {
@@ -317,21 +311,6 @@ export default function TaskRow({
 
           {isEditing ? (
             <div className="relative flex-1 min-w-0">
-              {/* Tag-only rows: render committed tags inline as a visual placeholder (display-only). */}
-              {isTagsOnlyRow && !hasNonTagTextWhileEditing && (task.tags?.length ?? 0) > 0 && (
-                <div
-                  aria-hidden
-                  className={cn(
-                    'pointer-events-none absolute inset-0',
-                    'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-                    'leading-[1.32]',
-                    'text-muted-foreground/35',
-                    'text-[0.92em]'
-                  )}
-                >
-                  {task.tags!.map(t => `#${t}`).join(' ')}
-                </div>
-              )}
               <textarea
                 ref={editInputRef as any}
                 value={editingText}
@@ -345,6 +324,8 @@ export default function TaskRow({
                 spellCheck={false}
                 className={cn(
                   'flex-1 min-w-0 w-full',
+                  // Remove default textarea chrome so edit mode doesn't change row height.
+                  'p-0 m-0 border-0 outline-none appearance-none',
                   'resize-none overflow-hidden bg-transparent',
                   'whitespace-pre-wrap break-words overflow-wrap-anywhere',
                   'leading-[1.32]',
@@ -374,7 +355,7 @@ export default function TaskRow({
                 : // If the row only has tags, render them as a subdued "title" so it isn't an empty line.
                 task.tags && task.tags.length > 0
                   ? (
-                      <span className="text-muted-foreground/35 text-[0.92em]">
+                      <span className="text-muted-foreground/25 text-[0.92em]">
                         {task.tags.map(t => `#${t}`).join(' ')}
                       </span>
                     )
