@@ -85,7 +85,7 @@ export default function TaskRow({
   const entryRowAffordanceClass =
     isEntryRowEmpty && !isEditing
       ? // Neutral subtle border (NOT blue), no fill.
-        'ring-1 ring-muted-foreground/20 hover:ring-muted-foreground/30 cursor-text'
+        'outline outline-1 outline-muted-foreground/20 hover:outline-muted-foreground/30 -outline-offset-1 cursor-text'
       : '';
 
   const isTagsOnlyRow =
@@ -171,7 +171,7 @@ export default function TaskRow({
 
     if (baseline > 0 && scroll <= baseline + 2) {
       // Keep baseline sizing from CSS (h/min-h) and avoid pixel drift.
-      el.style.height = '';
+      el.style.height = `${ROW_LINE_HEIGHT_PX}px`;
       return;
     }
 
@@ -220,13 +220,14 @@ export default function TaskRow({
       className={cn(
         // Flat, text-line feel (no card chrome)
         'group relative flex items-start gap-1 px-2 py-1.5 pr-8 focus:outline-none',
+        'box-border min-h-[44px]',
         'bg-transparent',
         // Subtle hover highlight only (not for the persistent entry row, which should read as an input field)
         !isEntryRow ? 'hover:bg-muted/8' : '',
         activeRowClass,
         entryRowAffordanceClass,
         // Editing affordance: visible, non-shifting ring (row-level, not input-level)
-        isEditing ? 'ring-1 ring-ring/55' : '',
+        isEditing ? 'outline outline-1 outline-ring/55 -outline-offset-1' : '',
         completedOpacityClass,
         containerClassName
       )}
@@ -418,69 +419,62 @@ export default function TaskRow({
         </div>
 
         {/* Secondary metadata line (tags). Keep visible during editing to avoid row-height jump. */}
-        {!isEntryRow && task.tags && task.tags.length > 0 && (
-          <div
-            className={cn(
-              visibleTitle.length === 0 ? 'mt-0' : 'mt-0.5',
-              'text-[10px] leading-[1.0]',
-              // Muted blue, lower priority than task text but clearly clickable.
-              'text-primary/45',
-              'whitespace-nowrap overflow-hidden text-ellipsis',
-              ''
-            )}
-          >
-            {task.tags.map((tag, i) => (
-              <span key={tag}>
-                {i > 0 ? ' ' : ''}
-                <span className="inline-flex items-center gap-1">
-                  <button
-                    type="button"
-                    className={cn(
-                      'p-0 m-0 bg-transparent border-0',
-                      'cursor-pointer text-inherit',
-                      'hover:text-primary/60 hover:underline underline-offset-2',
-                      'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
-                    )}
-                    data-no-edit
-                    onMouseDown={e => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    onClick={e => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleTagClick(tag);
-                    }}
-                  >
-                    #{tag}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Remove tag ${tag}`}
-                    className={cn(
-                      'p-0 m-0 bg-transparent border-0',
-                      'cursor-pointer text-inherit',
-                      'opacity-35 hover:opacity-70',
-                      'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
-                    )}
-                    data-no-edit
-                    onMouseDown={e => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    onClick={e => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleRemoveTag(tag);
-                    }}
-                  >
-                    ×
-                  </button>
+        <div className="h-[14px] mt-0.5">
+          {!isEntryRow && task.tags && task.tags.length > 0 && (
+            <div className="text-[10px] leading-[1.0] text-primary/45 whitespace-nowrap overflow-hidden text-ellipsis">
+              {task.tags.map((tag, i) => (
+                <span key={tag}>
+                  {i > 0 ? ' ' : ''}
+                  <span className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      className={cn(
+                        'p-0 m-0 bg-transparent border-0',
+                        'cursor-pointer text-inherit',
+                        'hover:text-primary/60 hover:underline underline-offset-2',
+                        'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
+                      )}
+                      data-no-edit
+                      onMouseDown={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleTagClick(tag);
+                      }}
+                    >
+                      #{tag}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove tag ${tag}`}
+                      className={cn(
+                        'p-0 m-0 bg-transparent border-0',
+                        'cursor-pointer text-inherit',
+                        'opacity-35 hover:opacity-70',
+                        'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
+                      )}
+                      data-no-edit
+                      onMouseDown={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleRemoveTag(tag);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
                 </span>
-              </span>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Delete */}
