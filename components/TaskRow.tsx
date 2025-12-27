@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useLayoutEffect } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import type { Task } from '../app/page';
 import { highlightMatches } from '../lib/highlightMatches';
@@ -66,6 +66,9 @@ export default function TaskRow({
   searchQuery,
   onDelete,
 }: TaskRowProps) {
+  const internalRowRef = useRef<HTMLDivElement | null>(null);
+  const lastLoggedRef = useRef<{ isEditing: boolean; height: number } | null>(null);
+
   const completedClass = task.completed
     ? 'text-muted-foreground line-through'
     : '';
@@ -153,22 +156,24 @@ export default function TaskRow({
   const visibleTitle = task.text.trim();
 
   const autosizeTextarea = (el: HTMLTextAreaElement) => {
-    // Prevent the subtle "row jumps a few px on focus" effect:
-    // Some browsers report `scrollHeight` slightly larger than a single line even with 0 padding.
-    // We clamp small deltas so 1-line rows keep a stable baseline height, but still allow growth.
+    // STRICT layout stability:
+    // For single-line content, do NOT set an inline height at all (let CSS baseline control it),
+    // because some browsers report scrollHeight slightly larger than one line and cause a jump.
+    // Only apply an explicit height when content truly needs multiple lines.
     el.style.height = 'auto';
 
     const cs = window.getComputedStyle(el);
     const lineHeightPx = Number.parseFloat(cs.lineHeight);
-    const singleLine = Number.isFinite(lineHeightPx) ? Math.round(lineHeightPx) : 0;
-
+    const baseline = Number.isFinite(lineHeightPx) ? lineHeightPx : 0;
     const scroll = el.scrollHeight;
-    const next =
-      singleLine > 0 && scroll <= singleLine + 2
-        ? singleLine
-        : scroll;
 
-    el.style.height = `${next}px`;
+    if (baseline > 0 && scroll <= baseline + 2) {
+      // Keep baseline sizing from CSS (h/min-h) and avoid pixel drift.
+      el.style.height = '';
+      return;
+    }
+
+    el.style.height = `${scroll}px`;
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -182,9 +187,29 @@ export default function TaskRow({
     autosizeTextarea(el);
   }, [isEditing, editingText, editInputRef]);
 
+  useLayoutEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    const el = internalRowRef.current;
+    if (!el) return;
+    const h = el.getBoundingClientRect().height;
+    const prev = lastLoggedRef.current;
+    if (!prev || prev.isEditing !== isEditing) {
+      // Verification: inactive vs active row height should be identical.
+      // Compare logs for the same task id across state transitions.
+      // eslint-disable-next-line no-console
+      console.log('[RowHeight]', { id: task.id, isEditing, height: h });
+      lastLoggedRef.current = { isEditing, height: h };
+    }
+  }, [isEditing, task.id]);
+
   return (
     <div
-      ref={rowRef as any}
+      ref={(el: HTMLDivElement | null) => {
+        internalRowRef.current = el;
+        if (typeof rowRef === 'function') {
+          (rowRef as any)(el);
+        }
+      }}
       role="listitem"
       tabIndex={isActive ? 0 : -1}
       onFocus={onFocusRow as any}
