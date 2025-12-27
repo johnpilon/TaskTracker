@@ -88,7 +88,7 @@ export default function Home() {
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -133,6 +133,76 @@ export default function Home() {
 
   const computeTags = (text: string) => parseTaskMeta(text).tags;
   const searchOverlayInnerRef = useRef<HTMLDivElement | null>(null);
+
+  const extractCommittedTagsFromDraft = (
+    value: string,
+    caret: number | null
+  ): { nextValue: string; extracted: string[]; nextCaret: number | null } => {
+    // "Immediate" commit here means: once a tag token is complete (terminated by whitespace),
+    // we commit it into task.tags[] and remove it from the edit buffer so it doesn’t remain inline.
+    //
+    // We intentionally DO NOT commit a trailing `#tag` at end-of-string until blur/save to
+    // avoid committing partial tags while the user is still typing.
+    const TAG_TOKEN_TERMINATED_BY_SPACE = /(^|\s)#([a-zA-Z0-9_-]+)(?=\s)/g;
+
+    const extracted: string[] = [];
+    let nextCaret = caret;
+
+    let out = '';
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_TOKEN_TERMINATED_BY_SPACE.exec(value))) {
+      const leading = match[1] ?? '';
+      const tag = match[2] ?? '';
+      const fullStart = match.index; // includes leading (space or start)
+      const tokenStart = fullStart + leading.length;
+      const tokenEnd = tokenStart + 1 + tag.length; // "#"+tag
+
+      out += value.slice(lastIndex, fullStart);
+      // Preserve exactly the original leading whitespace (if any) so we don’t
+      // accidentally introduce new spaces/newlines while the user types.
+      out += leading;
+
+      lastIndex = tokenEnd;
+
+      const normalized = tag.toLowerCase();
+      if (normalized) extracted.push(normalized);
+
+      if (typeof nextCaret === 'number' && tokenEnd <= nextCaret) {
+        // We replaced "#tag" with '' (but kept leading space if present), so caret moves left.
+        const removedLen = tokenEnd - fullStart;
+        const addedLen = leading.length;
+        nextCaret = Math.max(0, nextCaret - (removedLen - addedLen));
+      }
+    }
+
+    if (lastIndex === 0) {
+      return { nextValue: value, extracted: [], nextCaret };
+    }
+
+    out += value.slice(lastIndex);
+    // Keep line breaks intact while preventing runaway double-spaces from repeated tag commits.
+    const nextValue = out.replace(/[ \t]{2,}/g, ' ');
+    if (typeof nextCaret === 'number') {
+      nextCaret = Math.min(nextValue.length, nextCaret);
+    }
+    return { nextValue, extracted: Array.from(new Set(extracted)), nextCaret };
+  };
+
+  const mergeTagsIntoTask = (taskId: string, tags: string[]) => {
+    if (tags.length === 0) return;
+    setAllTasks(prev =>
+      prev.map(t => {
+        if (t.id !== taskId) return t;
+        const merged = Array.from(new Set([...(t.tags ?? []), ...tags.map(x => x.toLowerCase())]));
+        return {
+          ...t,
+          tags: merged,
+          meta: { tags: merged },
+        };
+      })
+    );
+  };
 
   const MAX_RECENT_VIEWS = 8;
   // Recent views are ephemeral shortcuts, not saved state.
@@ -191,8 +261,20 @@ export default function Home() {
       }
     );
 
-    const text = withoutMomentum.replace(/\s+/g, ' ').trim();
-    const tags = parseTaskMeta(text).tags;
+    // Extract and remove #tags on commit.
+    // Canonical model: task.text contains human-readable text ONLY; task.tags[] is the source of truth.
+    const extractedTags: string[] = [];
+    const withoutTags = withoutMomentum.replace(
+      /(^|\s)#([a-zA-Z0-9_-]+)(?=\s|$)/g,
+      (_m, leading, tag) => {
+        const normalized = String(tag).toLowerCase();
+        if (normalized) extractedTags.push(normalized);
+        return leading || ' ';
+      }
+    );
+
+    const text = withoutTags.replace(/\s+/g, ' ').trim();
+    const tags = Array.from(new Set(extractedTags));
     return { text, tags, ...(intent ? { intent } : {}), ...(momentum ? { momentum } : {}) };
   };
 
@@ -213,7 +295,13 @@ export default function Home() {
           ? {
               ...t,
               text: nextText,
-              tags: nextTags,
+              // Canonical tags: tags live in task.tags[] only (not in text).
+              // When editing, the text usually contains no #tags; never wipe tags on blur.
+              // If user types new #tags, merge them into existing tags.
+              tags:
+                nextTags.length > 0
+                  ? Array.from(new Set([...(t.tags ?? []), ...nextTags.map(x => x.toLowerCase())]))
+                  : (t.tags ?? []),
               ...(() => {
                 const nextIntent =
                   parsed.intent ??
@@ -224,7 +312,12 @@ export default function Home() {
               // Shorthand accelerator: typing `!m` turns Momentum on.
               // It does NOT auto-turn Momentum off if you later remove `!m` from the text.
               ...(parsed.momentum ? { momentum: true } : {}),
-              meta: { tags: nextTags },
+              meta: {
+                tags:
+                  nextTags.length > 0
+                    ? Array.from(new Set([...(t.tags ?? []), ...nextTags.map(x => x.toLowerCase())]))
+                    : (t.tags ?? []),
+              },
             }
           : t
       )
@@ -751,6 +844,22 @@ export default function Home() {
     );
   };
 
+  const removeTagFromTask = (task: Task, tag: string) => {
+    const needle = tag.toLowerCase();
+    setUndoAction({ type: 'edit', task });
+    setAllTasks(prev =>
+      prev.map(t => {
+        if (t.id !== task.id) return t;
+        const nextTags = (t.tags ?? []).filter(x => x.toLowerCase() !== needle);
+        return {
+          ...t,
+          tags: nextTags,
+          meta: { tags: nextTags },
+        };
+      })
+    );
+  };
+
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
     const createdId = createId();
     const createdAt = Date.now();
@@ -1091,6 +1200,10 @@ export default function Home() {
       setEditingId(task.id);
       setEditingText(task.text + e.key);
       setCaretPos(task.text.length + 1);
+      // Critical: ensure the textarea takes focus after this render.
+      // Without this, focus stays on the row and each keystroke re-seeds from `task.text`,
+      // appearing as "overwriting" the same character.
+      caretInitializedRef.current = false;
     }
   };
 
@@ -1313,20 +1426,6 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
       <div className="max-w-3xl mx-auto">
-        {/* Primary capture input */}
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && addTask()}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          placeholder="What needs to be done?"
-          className="w-full bg-card border border-border rounded-lg px-6 py-4 text-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
-
         {/* 🔍 Search input */}
         <div className="relative mt-4">
           {isTagView && (
@@ -1621,12 +1720,13 @@ export default function Home() {
         )}
 
         {/* Task list container provides visual structure without adding noise. */}
-        <div className="mt-8 rounded-xl border border-border/50 bg-secondary dark:bg-card p-5 sm:p-6">
+        {/* List container: very light “sheet” (content-first, minimal chrome) */}
+        <div className="mt-6 rounded-lg border border-border/10 bg-transparent px-1 py-1">
           {/* Active view indicator: real left border for reliable visibility.
               Views are ephemeral and exited by clearing search. */}
           <div
             className={cn(
-              'space-y-1.5 dark:space-y-2 relative',
+              'space-y-1 relative',
               isMomentumViewActive || searchViewState !== null
                 ? isTagView
                   ? 'border-l-[6px] border-primary/80 pl-5'
@@ -1657,13 +1757,15 @@ export default function Home() {
                 indentWidth={INDENT_WIDTH}
                 activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
                 onTagClick={handleTagSearchClick}
+                onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
                 onToggleMomentum={() => toggleMomentum(task)}
                 rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
                 onFocusRow={() => setActiveTaskId(task.id)}
                 onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
                   const t = e.target as HTMLElement | null;
-                  if (t?.closest('input,textarea,button')) return;
+                  if (t?.closest('[data-no-edit],input,textarea,button')) return;
                   setActiveTaskId(task.id);
+                  if (editingId !== task.id) startEditing(task, task.text.length);
                 }}
                 onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
                   handleRowKeyDownCapture(e, index, task)}
@@ -1675,17 +1777,27 @@ export default function Home() {
                 editingText={editingId === task.id ? editingText : task.text}
                 editInputRef={editingId === task.id ? editInputRef : undefined}
                 onChangeEditingText={(value: string) => {
-                  setEditingText(value);
-
+                  // First mutation in an edit session establishes an undo snapshot.
                   if (
                     !editingOriginalRef.current ||
                     editingOriginalRef.current.taskId !== task.id
                   ) {
-                    editingOriginalRef.current = {
-                      taskId: task.id,
-                      snapshot: task,
-                    };
+                    editingOriginalRef.current = { taskId: task.id, snapshot: task };
                     setUndoAction({ type: 'edit', task });
+                  }
+
+                  const caret = editInputRef.current?.selectionStart ?? null;
+                  const extracted = extractCommittedTagsFromDraft(value, caret);
+                  if (extracted.extracted.length > 0) {
+                    mergeTagsIntoTask(task.id, extracted.extracted);
+                  }
+
+                  // Keep the visible edit buffer free of committed tags so inline tags do not persist.
+                  // Tag-only rows remain visually non-blank via textarea placeholder + the tag row.
+                  setEditingText(extracted.nextValue);
+                  if (typeof extracted.nextCaret === 'number') {
+                    setCaretPos(extracted.nextCaret);
+                    caretInitializedRef.current = false;
                   }
                 }}
                 onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
@@ -1704,6 +1816,45 @@ export default function Home() {
               />
             );
           })}
+
+          {/* Persistent entry row (Google Keep-like) */}
+          <div
+            className={cn(
+              'group relative flex items-start gap-1.5 px-2 py-2',
+              'text-foreground'
+            )}
+          >
+            {/* Placeholder for drag handle */}
+            <div className="w-[12px] h-[16px] self-start mt-[2px] opacity-0" aria-hidden />
+            {/* Placeholder for checkbox */}
+            <div className="h-4 w-4 self-start mt-[3px] opacity-0" aria-hidden />
+            {/* Placeholder for Momentum status slot */}
+            <div className="w-6 self-start mt-[3px] opacity-0" aria-hidden />
+
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  addTask();
+                }
+              }}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              rows={1}
+              placeholder="Add a note…"
+              className={cn(
+                'flex-1 min-w-0',
+                'resize-none overflow-hidden bg-transparent',
+                'text-base leading-[1.35]',
+                'focus:outline-none'
+              )}
+            />
+          </div>
           </div>
         </div>
       </div>

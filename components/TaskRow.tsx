@@ -14,6 +14,7 @@ interface TaskRowProps {
   indentWidth: number;
   activeTags?: string[];
   onTagClick?: unknown;
+  onRemoveTag?: unknown;
   onToggleMomentum?: unknown;
   // NOTE: These are runtime-only callbacks/refs coming from the parent client component.
   // We intentionally type-erase them to satisfy Next.js "client boundary" serializable-props checks.
@@ -34,27 +35,6 @@ interface TaskRowProps {
   onDelete: unknown;
 }
 
-const DragHandle = ({
-  onPointerDown,
-}: {
-  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
-}) => (
-  <div
-    onPointerDown={onPointerDown}
-    className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground select-none self-start mt-[2px] touch-none"
-    title="Drag to reorder. Drag left/right to indent."
-  >
-    <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
-      <circle cx="3" cy="3" r="1.5" />
-      <circle cx="9" cy="3" r="1.5" />
-      <circle cx="3" cy="8" r="1.5" />
-      <circle cx="9" cy="8" r="1.5" />
-      <circle cx="3" cy="13" r="1.5" />
-      <circle cx="9" cy="13" r="1.5" />
-    </svg>
-  </div>
-);
-
 export default function TaskRow({
   task,
   index,
@@ -64,6 +44,7 @@ export default function TaskRow({
   indentWidth,
   activeTags,
   onTagClick,
+  onRemoveTag,
   onToggleMomentum,
   rowRef,
   onFocusRow,
@@ -86,6 +67,7 @@ export default function TaskRow({
     : '';
 
   const completedOpacityClass = task.completed ? 'opacity-70' : '';
+  const activeRowClass = isActive || isEditing ? 'bg-muted/12' : '';
 
   // Active tag emphasis is semantic (token-based), not substring search-based.
   const renderTextWithActiveTags = (text: string) => {
@@ -146,6 +128,13 @@ export default function TaskRow({
     (onTagClick as any)(tag);
   };
 
+  const handleRemoveTag = (tag: string) => {
+    if (!onRemoveTag) return;
+    (onRemoveTag as any)(tag);
+  };
+
+  const visibleTitle = task.text.trim();
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     (onChangeEditingText as any)(e.target.value);
     e.currentTarget.style.height = 'auto';
@@ -168,162 +157,247 @@ export default function TaskRow({
       onMouseDown={onMouseDownRow as any}
       onKeyDownCapture={onKeyDownCapture as any}
       className={cn(
-        'group relative flex items-start gap-1.5 rounded-lg px-2 py-2.5 focus:outline-none',
-        // Elevation: page < panel < card
-        'bg-card dark:bg-secondary border border-border/60 dark:border-transparent',
-        'hover:border-border/80 dark:hover:border-transparent',
+        // Flat, text-line feel (no card chrome)
+        'group relative flex items-start gap-1 px-2 py-1.5 pr-8 focus:outline-none',
+        'bg-transparent',
+        // Subtle hover highlight only
+        'hover:bg-muted/8',
+        activeRowClass,
+        // Editing affordance: visible, non-shifting ring (row-level, not input-level)
+        isEditing ? 'ring-1 ring-ring/55' : '',
         completedOpacityClass
       )}
     >
       <div
         aria-hidden
-        className={`
-          pointer-events-none absolute inset-0 rounded-lg
-          transition-shadow
-          ${dragIndex === index ? 'shadow-[0_0_0_2px_var(--ring)] shadow-lg' : ''}
-          ${isActive && dragIndex !== index ? 'shadow-[0_0_0_1px_var(--border)]' : ''}
-          group-focus-visible:shadow-[0_0_0_2px_var(--ring)]
-        `}
+        className={cn(
+          'pointer-events-none absolute inset-0',
+          dragIndex === index ? 'shadow-[0_0_0_2px_hsl(var(--ring))]' : '',
+          'group-focus-visible:shadow-[0_0_0_2px_hsl(var(--ring))]'
+        )}
       />
 
-      {/* Indent rail */}
+      {/* Indent spacing */}
       <div
         style={{ width: effectiveIndent * indentWidth }}
-        className="flex self-start mt-[6px]"
+        className="flex self-start mt-[2px]"
       >
-        {Array.from({ length: effectiveIndent }).map((_, i) => (
-          <div key={i} className="w-1 mx-[6px] bg-border rounded" />
-        ))}
+        {/* Keep indentation spacing without extra visual noise */}
       </div>
 
-      <DragHandle onPointerDown={onPointerDown as any} />
+      {/* Drag handle slot: reserves space so content never shifts. */}
+      <div
+        className="w-5 self-start mt-[2px] mr-1 flex items-start justify-center"
+      >
+        <div
+          onPointerDown={onPointerDown as any}
+          className={cn(
+            'cursor-grab active:cursor-grabbing select-none touch-none',
+            // Hidden by default; visible on hover/focus. Always available on touch.
+            'opacity-0 pointer-events-none',
+            'group-hover:opacity-60 group-hover:pointer-events-auto',
+            'group-focus-within:opacity-60 group-focus-within:pointer-events-auto',
+            '[@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto',
+            'text-muted-foreground hover:text-foreground'
+          )}
+          data-no-edit
+        >
+          <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor" aria-hidden>
+            <circle cx="3" cy="3" r="1.5" />
+            <circle cx="9" cy="3" r="1.5" />
+            <circle cx="3" cy="8" r="1.5" />
+            <circle cx="9" cy="8" r="1.5" />
+            <circle cx="3" cy="13" r="1.5" />
+            <circle cx="9" cy="13" r="1.5" />
+          </svg>
+        </div>
+      </div>
 
       <input
         type="checkbox"
         checked={task.completed}
         onChange={onToggleCompleted as any}
-        className="h-4 w-4 accent-muted-foreground self-start mt-[3px]"
+        className="h-4 w-4 accent-muted-foreground self-start mt-[2px]"
+        data-no-edit
       />
 
-      {/* Momentum: fixed-width status slot (↝) so rows don’t shift when momentum toggles */}
-      <div className="w-6 self-start mt-[3px] flex items-center justify-center">
-        <button
-          type="button"
-          aria-label={task.momentum === true ? 'Remove Momentum' : 'Add Momentum'}
-          title="Momentum item"
-          onMouseDown={e => {
-            e.stopPropagation();
-          }}
-          onClick={e => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleToggleMomentum();
-          }}
+      <div className="flex-1 min-w-0">
+        <div
           className={cn(
-            'inline-flex h-4 w-4 items-center justify-center rounded',
-            'border transition-colors select-none touch-manipulation',
-            task.momentum === true
-              ? 'opacity-100 pointer-events-auto border-ring/40 bg-accent/25 text-primary/90'
-              : cn(
-                  // Hidden by default; appears on row hover (desktop) and always on touch.
-                  'opacity-0 pointer-events-none',
-                  'group-hover:opacity-100 group-hover:pointer-events-auto',
-                  '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
-                  'border-border/50 bg-muted/10 text-muted-foreground/70 hover:text-foreground hover:bg-accent/20'
-                )
-          )}
-        >
-          <span className="text-[13px] leading-none font-semibold">↝</span>
-        </button>
-      </div>
-
-      <div className="flex-1 min-w-0 grid">
-        <textarea
-          ref={editInputRef as any}
-          value={isEditing ? editingText : ''}
-          readOnly={!isEditing}
-          tabIndex={isEditing ? 0 : -1}
-          rows={1}
-          onChange={isEditing ? handleChange : undefined}
-          onKeyDown={isEditing ? (onTextareaKeyDown as any) : undefined}
-          onBlur={isEditing ? (onTextareaBlur as any) : undefined}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          className={cn(
-            'col-start-1 row-start-1',
-            'w-full resize-none overflow-hidden bg-transparent text-base p-0 m-0',
-            'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-            'leading-[1.35]',
-            'focus:outline-none',
-            isEditing
-              ? 'pointer-events-auto opacity-100 min-h-[1.4em]'
-              : 'pointer-events-none opacity-0 min-h-0 h-0',
+            'text-base font-normal w-full min-w-0',
+            'flex items-center gap-1',
+            isEditing ? 'overflow-visible' : 'whitespace-nowrap overflow-hidden',
+            'leading-[1.32] min-h-[1.32em]',
+            // Tag-only rows should read as subdued metadata (display mode only).
+            !isEditing && visibleTitle.length === 0 ? 'text-muted-foreground/55' : '',
             completedClass
           )}
-          style={{
-            caretColor: 'currentColor',
-            height: isEditing ? undefined : 0,
-          }}
-        />
+        >
+          {/* Momentum indicator is visible in edit mode as well */}
+          <button
+            type="button"
+            aria-label={task.momentum === true ? 'Remove Momentum' : 'Add Momentum'}
+            onMouseDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleToggleMomentum();
+            }}
+            className={cn(
+              // Reserve a tiny inline slot so text never shifts when the indicator appears.
+              // Slightly larger hit area than the visible circle (no row height change).
+              'inline-flex w-4 h-4 items-center justify-center shrink-0',
+              task.momentum === true
+                ? 'opacity-100 pointer-events-auto'
+                : cn(
+                    'opacity-0 pointer-events-none',
+                    // Visible on hover OR when row is active/editing
+                    'group-hover:opacity-100 group-hover:pointer-events-auto',
+                    (isActive || isEditing) ? 'opacity-100 pointer-events-auto' : ''
+                  )
+            )}
+            data-no-edit
+          >
+            <span
+              aria-hidden
+              className={cn(
+                'block rounded-full',
+                'h-2 w-2', // 8px circle
+                task.momentum === true
+                  ? cn('bg-primary/70', 'group-hover:bg-primary/80')
+                  : cn(
+                      'bg-transparent',
+                      'border',
+                      (isActive || isEditing) ? 'border-primary/55' : 'border-primary/30',
+                      'group-hover:border-primary/50'
+                    )
+              )}
+            />
+          </button>
 
-        {!isEditing && (
-          <>
+          {isEditing ? (
+            <textarea
+              ref={editInputRef as any}
+              value={editingText}
+              rows={1}
+              onChange={handleChange}
+              onKeyDown={onTextareaKeyDown as any}
+              onBlur={onTextareaBlur as any}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={
+                visibleTitle.length === 0 && (task.tags?.length ?? 0) > 0
+                  ? task.tags!.map(t => `#${t}`).join(' ')
+                  : undefined
+              }
+              className={cn(
+                'flex-1 min-w-0',
+                'resize-none overflow-hidden bg-transparent',
+                'whitespace-pre-wrap break-words overflow-wrap-anywhere',
+                'leading-[1.32]',
+                // Tag-only rows: show tags as very light “ghost” text, but hide it immediately on focus
+                // so it never looks like you’re typing over real content.
+                'focus:outline-none placeholder:text-muted-foreground/25 focus:placeholder:text-transparent',
+                completedClass
+              )}
+              style={{ caretColor: 'hsl(var(--foreground))' }}
+            />
+          ) : (
             <div
               onMouseDown={e => {
                 e.preventDefault();
                 e.stopPropagation();
                 (onTextClick as any)(e);
               }}
-              className={cn(
-              'col-start-1 row-start-1 text-base font-normal cursor-text block w-full',
-                'whitespace-pre-wrap break-words overflow-wrap-anywhere',
-                'leading-[1.35] min-h-[1.35em]',
-                completedClass
-              )}
+              // Fill remaining line width so "blank row" clicks still show an I-beam
+              // and reliably enter edit mode via the text click handler.
+              className="flex-1 min-w-0 truncate cursor-text"
             >
               {task.text.length > 0
                 ? activeTags && activeTags.length > 0
-                  ? renderTextWithActiveTags(task.text)
+                  ? renderTextWithActiveTags(visibleTitle)
                   : searchQuery
-                    ? highlightMatches(task.text, searchQuery)
-                    : task.text
-                : '\u00A0'}
+                    ? highlightMatches(visibleTitle, searchQuery)
+                    : visibleTitle
+                : // If the row only has tags, render them as a subdued "title" so it isn't an empty line.
+                task.tags && task.tags.length > 0
+                  ? (
+                      <span className="text-muted-foreground/35">
+                        {task.tags.map(t => `#${t}`).join(' ')}
+                      </span>
+                    )
+                  : '\u00A0'}
             </div>
+          )}
+        </div>
 
-            {task.tags && task.tags.length > 0 && (
-              <div
-                className="col-start-1 row-start-2 mt-0.5 text-[10px] leading-none font-mono opacity-50 truncate"
-                style={{ fontFamily: 'monospace' }}
-              >
-                tags:{' '}
-                [
-                {task.tags.map((tag, i) => (
-                  <span key={tag}>
-                    {i > 0 ? ', ' : ''}
-                    <button
-                      type="button"
-                      className="p-0 m-0 bg-transparent border-0 cursor-pointer text-inherit focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
-                      onMouseDown={e => {
-                        // prevent row text selection / edit activation
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onClick={e => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleTagClick(tag);
-                      }}
-                    >
-                      {tag}
-                    </button>
-                  </span>
-                ))}
-                ]
-              </div>
+        {/* Secondary metadata line (tags). Keep visible during editing to avoid row-height jump. */}
+        {task.tags && task.tags.length > 0 && (
+          <div
+            className={cn(
+              visibleTitle.length === 0 ? 'mt-0' : 'mt-0.5',
+              'text-[10px] leading-[1.0]',
+              'text-muted-foreground/45',
+              'whitespace-nowrap overflow-hidden text-ellipsis',
+              ''
             )}
-          </>
+          >
+            {task.tags.map((tag, i) => (
+              <span key={tag}>
+                {i > 0 ? ' ' : ''}
+                <span className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      'p-0 m-0 bg-transparent border-0',
+                      'cursor-pointer text-inherit',
+                      'hover:text-muted-foreground/60 hover:underline underline-offset-2',
+                      'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
+                    )}
+                    data-no-edit
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleTagClick(tag);
+                    }}
+                  >
+                    #{tag}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Remove tag ${tag}`}
+                    className={cn(
+                      'p-0 m-0 bg-transparent border-0',
+                      'cursor-pointer text-inherit',
+                      'opacity-35 hover:opacity-70',
+                      'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm'
+                    )}
+                    data-no-edit
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleRemoveTag(tag);
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -333,25 +407,30 @@ export default function TaskRow({
         aria-label="Delete task"
         type="button"
         className={cn(
-          'inline-flex h-9 w-9 items-center justify-center rounded-full',
-          'border-[3px] shadow-sm',
+          'absolute right-2 top-[6px]',
+          'inline-flex h-6 w-6 items-center justify-center',
           'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          // Reduce visual weight at rest; red emphasis only on hover.
-          'border-muted-foreground/45 bg-muted/10 text-muted-foreground/80',
-          'hover:border-destructive/80 hover:bg-destructive/12 hover:text-destructive',
-          // Only appear on hover (desktop), always visible on touch.
-          'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100'
+          // Hover-only, minimal chrome
+          'text-muted-foreground/70 hover:text-destructive',
+          'hover:bg-destructive/10 hover:rounded-full',
+          // When hidden, disable pointer events so the invisible button doesn't block click-to-edit.
+          'opacity-0 pointer-events-none',
+          'group-hover:opacity-100 group-hover:pointer-events-auto',
+          'group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
+          '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto'
         )}
+        data-no-edit
         onMouseDown={e => {
           // prevent row selection shift
           e.stopPropagation();
         }}
       >
-        <span className="text-xl leading-none font-semibold" aria-hidden>
+        <span className="text-lg leading-none font-semibold" aria-hidden>
           ×
         </span>
       </button>
     </div>
   );
 }
+
 

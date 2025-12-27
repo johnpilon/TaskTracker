@@ -104,7 +104,21 @@ const normalizeTask = (value: unknown): Task | null => {
     typeof indent === 'number' && Number.isFinite(indent) ? indent : 0;
   const safeIndent = Math.max(0, Math.min(MAX_INDENT, Math.trunc(indentNumber)));
   const safeTags =
-    Array.isArray(tags) && tags.every(t => typeof t === 'string') ? tags : [];
+    Array.isArray(tags) && tags.every(t => typeof t === 'string')
+      ? tags.map(t => t.toLowerCase())
+      : [];
+
+  // Migration/canonicalization: strip inline #tags from text and merge into task.tags[].
+  const extractedFromText: string[] = [];
+  const strippedText = text
+    .replace(/(^|\s)#([a-zA-Z0-9_-]+)(?=\s|$)/g, (_m, leading, tag) => {
+      const normalized = String(tag).toLowerCase();
+      if (normalized) extractedFromText.push(normalized);
+      return leading || ' ';
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+  const mergedTags = Array.from(new Set([...safeTags, ...extractedFromText]));
 
   // Momentum is a boolean state.
   // Migration: legacy "focus" was represented as intent === 'now'.
@@ -123,7 +137,7 @@ const normalizeTask = (value: unknown): Task | null => {
 
   return {
     id,
-    text,
+    text: strippedText,
     createdAt: safeCreatedAt,
     order: safeOrder,
     completed: safeCompleted,
@@ -131,7 +145,7 @@ const normalizeTask = (value: unknown): Task | null => {
     archived: safeArchived,
     ...(safeArchivedAt ? { archivedAt: safeArchivedAt } : {}),
     indent: safeIndent,
-    tags: safeTags,
+    tags: mergedTags,
     ...(safeIntent ? { intent: safeIntent } : {}),
     momentum: safeMomentum,
     ...(safeMeta ? { meta: safeMeta } : {}),
