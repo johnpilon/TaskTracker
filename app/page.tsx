@@ -1774,6 +1774,8 @@ export default function Home() {
               meta: { tags: [] },
             }}
             index={-1}
+            isEntryRow
+            containerClassName="mt-2"
             isActive={activeTaskId === NEW_TASK_ROW_ID}
             dragIndex={dragIndex}
             effectiveIndent={0}

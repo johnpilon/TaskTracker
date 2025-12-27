@@ -12,6 +12,8 @@ interface TaskRowProps {
   dragIndex: number | null;
   effectiveIndent: number;
   indentWidth: number;
+  isEntryRow?: boolean;
+  containerClassName?: string;
   activeTags?: string[];
   onTagClick?: unknown;
   onRemoveTag?: unknown;
@@ -42,6 +44,8 @@ export default function TaskRow({
   dragIndex,
   effectiveIndent,
   indentWidth,
+  isEntryRow,
+  containerClassName,
   activeTags,
   onTagClick,
   onRemoveTag,
@@ -67,7 +71,15 @@ export default function TaskRow({
     : '';
 
   const completedOpacityClass = task.completed ? 'opacity-70' : '';
-  const activeRowClass = isActive || isEditing ? 'bg-muted/12' : '';
+  // Avoid making the empty capture row look "selected" when idle.
+  // It should feel like an invitation, not a selection target.
+  const activeRowClass = (isActive || isEditing) && !(isEntryRow && !isEditing) ? 'bg-muted/12' : '';
+  const isEntryRowEmpty = isEntryRow === true && task.text.trim().length === 0;
+  const entryRowAffordanceClass =
+    isEntryRowEmpty && !isEditing
+      ? // Neutral subtle border (NOT blue), no fill.
+        'ring-1 ring-muted-foreground/20 hover:ring-muted-foreground/30 cursor-text'
+      : '';
 
   // Active tag emphasis is semantic (token-based), not substring search-based.
   const renderTextWithActiveTags = (text: string) => {
@@ -163,9 +175,11 @@ export default function TaskRow({
         // Subtle hover highlight only
         'hover:bg-muted/8',
         activeRowClass,
+        entryRowAffordanceClass,
         // Editing affordance: visible, non-shifting ring (row-level, not input-level)
         isEditing ? 'ring-1 ring-ring/55' : '',
-        completedOpacityClass
+        completedOpacityClass,
+        containerClassName
       )}
     >
       <div
@@ -331,6 +345,13 @@ export default function TaskRow({
                         {task.tags.map(t => `#${t}`).join(' ')}
                       </span>
                     )
+                  : // Persistent capture row hint (visual only; not a placeholder attribute).
+                    isEntryRowEmpty
+                    ? (
+                        <span className="text-muted-foreground/45">
+                          Add item…
+                        </span>
+                      )
                   : '\u00A0'}
             </div>
           )}
