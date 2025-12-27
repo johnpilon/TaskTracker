@@ -329,6 +329,8 @@ export default function TaskRow({
                   'resize-none overflow-hidden bg-transparent',
                   'whitespace-pre-wrap break-words overflow-wrap-anywhere',
                   'leading-[1.32]',
+                  // Match the display-line baseline so the tag row doesn't shift on focus.
+                  'h-[1.32em] min-h-[1.32em]',
                   'focus:outline-none',
                   completedClass
                 )}
