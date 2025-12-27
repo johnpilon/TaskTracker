@@ -172,8 +172,8 @@ export default function TaskRow({
         // Flat, text-line feel (no card chrome)
         'group relative flex items-start gap-1 px-2 py-1.5 pr-8 focus:outline-none',
         'bg-transparent',
-        // Subtle hover highlight only
-        'hover:bg-muted/8',
+        // Subtle hover highlight only (not for the persistent entry row, which should read as an input field)
+        !isEntryRow ? 'hover:bg-muted/8' : '',
         activeRowClass,
         entryRowAffordanceClass,
         // Editing affordance: visible, non-shifting ring (row-level, not input-level)
@@ -199,43 +199,53 @@ export default function TaskRow({
         {/* Keep indentation spacing without extra visual noise */}
       </div>
 
-      {/* Drag handle slot: reserves space so content never shifts. */}
+      {/* Controls: NEVER render for the persistent entry row */}
+      {!isEntryRow && (
+        <>
+          {/* Drag handle slot: reserves space so content never shifts. */}
+          <div className="w-5 self-start mt-[2px] mr-1 flex items-start justify-center">
+            <div
+              onPointerDown={onPointerDown as any}
+              className={cn(
+                'cursor-grab active:cursor-grabbing select-none touch-none',
+                // Hidden by default; visible on hover/focus. Always available on touch.
+                'opacity-0 pointer-events-none',
+                'group-hover:opacity-60 group-hover:pointer-events-auto',
+                'group-focus-within:opacity-60 group-focus-within:pointer-events-auto',
+                '[@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto',
+                'text-muted-foreground hover:text-foreground'
+              )}
+              data-no-edit
+            >
+              <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor" aria-hidden>
+                <circle cx="3" cy="3" r="1.5" />
+                <circle cx="9" cy="3" r="1.5" />
+                <circle cx="3" cy="8" r="1.5" />
+                <circle cx="9" cy="8" r="1.5" />
+                <circle cx="3" cy="13" r="1.5" />
+                <circle cx="9" cy="13" r="1.5" />
+              </svg>
+            </div>
+          </div>
+
+          <input
+            type="checkbox"
+            checked={task.completed}
+            onChange={onToggleCompleted as any}
+            className="h-4 w-4 accent-muted-foreground self-start mt-[2px]"
+            data-no-edit
+          />
+        </>
+      )}
+
       <div
-        className="w-5 self-start mt-[2px] mr-1 flex items-start justify-center"
+        className={cn(
+          'flex-1 min-w-0',
+          // For the entry row, preserve the same text start position as normal rows
+          // without rendering the controls themselves.
+          isEntryRow ? 'pl-[calc(1.25rem+1.25rem+1rem+0.25rem)]' : ''
+        )}
       >
-        <div
-          onPointerDown={onPointerDown as any}
-          className={cn(
-            'cursor-grab active:cursor-grabbing select-none touch-none',
-            // Hidden by default; visible on hover/focus. Always available on touch.
-            'opacity-0 pointer-events-none',
-            'group-hover:opacity-60 group-hover:pointer-events-auto',
-            'group-focus-within:opacity-60 group-focus-within:pointer-events-auto',
-            '[@media(hover:none)]:opacity-60 [@media(hover:none)]:pointer-events-auto',
-            'text-muted-foreground hover:text-foreground'
-          )}
-          data-no-edit
-        >
-          <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor" aria-hidden>
-            <circle cx="3" cy="3" r="1.5" />
-            <circle cx="9" cy="3" r="1.5" />
-            <circle cx="3" cy="8" r="1.5" />
-            <circle cx="9" cy="8" r="1.5" />
-            <circle cx="3" cy="13" r="1.5" />
-            <circle cx="9" cy="13" r="1.5" />
-          </svg>
-        </div>
-      </div>
-
-      <input
-        type="checkbox"
-        checked={task.completed}
-        onChange={onToggleCompleted as any}
-        className="h-4 w-4 accent-muted-foreground self-start mt-[2px]"
-        data-no-edit
-      />
-
-      <div className="flex-1 min-w-0">
         <div
           className={cn(
             'text-base font-normal w-full min-w-0',
@@ -247,50 +257,52 @@ export default function TaskRow({
             completedClass
           )}
         >
-          {/* Momentum indicator is visible in edit mode as well */}
-          <button
-            type="button"
-            aria-label={task.momentum === true ? 'Remove Momentum' : 'Add Momentum'}
-            onMouseDown={e => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onClick={e => {
-              e.preventDefault();
-              e.stopPropagation();
-              handleToggleMomentum();
-            }}
-            className={cn(
-              // Reserve a tiny inline slot so text never shifts when the indicator appears.
-              // Slightly larger hit area than the visible circle (no row height change).
-              'inline-flex w-4 h-4 items-center justify-center shrink-0',
-              task.momentum === true
-                ? 'opacity-100 pointer-events-auto'
-                : cn(
-                    'opacity-0 pointer-events-none',
-                    // Visible on hover OR when row is active/editing
-                    'group-hover:opacity-100 group-hover:pointer-events-auto',
-                    (isActive || isEditing) ? 'opacity-100 pointer-events-auto' : ''
-                  )
-            )}
-            data-no-edit
-          >
-            <span
-              aria-hidden
+          {/* Momentum indicator: NEVER render for the persistent entry row */}
+          {!isEntryRow && (
+            <button
+              type="button"
+              aria-label={task.momentum === true ? 'Remove Momentum' : 'Add Momentum'}
+              onMouseDown={e => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleToggleMomentum();
+              }}
               className={cn(
-                'block rounded-full',
-                'h-2 w-2', // 8px circle
+                // Reserve a tiny inline slot so text never shifts when the indicator appears.
+                // Slightly larger hit area than the visible circle (no row height change).
+                'inline-flex w-4 h-4 items-center justify-center shrink-0',
                 task.momentum === true
-                  ? cn('bg-primary/70', 'group-hover:bg-primary/80')
+                  ? 'opacity-100 pointer-events-auto'
                   : cn(
-                      'bg-transparent',
-                      'border',
-                      (isActive || isEditing) ? 'border-primary/55' : 'border-primary/30',
-                      'group-hover:border-primary/50'
+                      'opacity-0 pointer-events-none',
+                      // Visible on hover OR when row is active/editing
+                      'group-hover:opacity-100 group-hover:pointer-events-auto',
+                      (isActive || isEditing) ? 'opacity-100 pointer-events-auto' : ''
                     )
               )}
-            />
-          </button>
+              data-no-edit
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'block rounded-full',
+                  'h-2 w-2', // 8px circle
+                  task.momentum === true
+                    ? cn('bg-primary/70', 'group-hover:bg-primary/80')
+                    : cn(
+                        'bg-transparent',
+                        'border',
+                        (isActive || isEditing) ? 'border-primary/55' : 'border-primary/30',
+                        'group-hover:border-primary/50'
+                      )
+                )}
+              />
+            </button>
+          )}
 
           {isEditing ? (
             <textarea
@@ -358,7 +370,7 @@ export default function TaskRow({
         </div>
 
         {/* Secondary metadata line (tags). Keep visible during editing to avoid row-height jump. */}
-        {task.tags && task.tags.length > 0 && (
+        {!isEntryRow && task.tags && task.tags.length > 0 && (
           <div
             className={cn(
               visibleTitle.length === 0 ? 'mt-0' : 'mt-0.5',
@@ -423,33 +435,35 @@ export default function TaskRow({
       </div>
 
       {/* Delete */}
-      <button
-        onClick={onDelete as any}
-        aria-label="Delete task"
-        type="button"
-        className={cn(
-          'absolute right-2 top-[6px]',
-          'inline-flex h-6 w-6 items-center justify-center',
-          'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          // Hover-only, minimal chrome
-          'text-muted-foreground/70 hover:text-destructive',
-          'hover:bg-destructive/10 hover:rounded-full',
-          // When hidden, disable pointer events so the invisible button doesn't block click-to-edit.
-          'opacity-0 pointer-events-none',
-          'group-hover:opacity-100 group-hover:pointer-events-auto',
-          'group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
-          '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto'
-        )}
-        data-no-edit
-        onMouseDown={e => {
-          // prevent row selection shift
-          e.stopPropagation();
-        }}
-      >
-        <span className="text-lg leading-none font-semibold" aria-hidden>
-          ×
-        </span>
-      </button>
+      {!isEntryRow && (
+        <button
+          onClick={onDelete as any}
+          aria-label="Delete task"
+          type="button"
+          className={cn(
+            'absolute right-2 top-[6px]',
+            'inline-flex h-6 w-6 items-center justify-center',
+            'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            // Hover-only, minimal chrome
+            'text-muted-foreground/70 hover:text-destructive',
+            'hover:bg-destructive/10 hover:rounded-full',
+            // When hidden, disable pointer events so the invisible button doesn't block click-to-edit.
+            'opacity-0 pointer-events-none',
+            'group-hover:opacity-100 group-hover:pointer-events-auto',
+            'group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
+            '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto'
+          )}
+          data-no-edit
+          onMouseDown={e => {
+            // prevent row selection shift
+            e.stopPropagation();
+          }}
+        >
+          <span className="text-lg leading-none font-semibold" aria-hidden>
+            ×
+          </span>
+        </button>
+      )}
     </div>
   );
 }

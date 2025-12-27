@@ -1869,8 +1869,13 @@ export default function Home() {
               }
             }}
             onTextareaBlur={() => {
-              // Leaving the capture row without committing should leave it empty.
-              cancelNewRowEdit();
+              // On blur: commit if there is content (text or tags), otherwise leave it empty.
+              const parsed = parseTaskInput(editingText);
+              if (parsed.text.length > 0 || parsed.tags.length > 0) {
+                commitNewTaskFromRow();
+              } else {
+                cancelNewRowEdit();
+              }
             }}
             onTextClick={() => {
               commitActiveEditIfAny();
