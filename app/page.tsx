@@ -13,12 +13,7 @@ import {
   nextIndexFromRowArrow,
   shouldIgnoreTab,
 } from '../lib/keyboard';
-import {
-  clampCaret,
-  getAddedTags,
-  getOriginalSnapshot,
-  shouldCommitEdit,
-} from '../lib/editing';
+import { createEditingController } from '../lib/editingController';
 import { cn } from '../lib/utils';
 
 /* =======================
@@ -151,70 +146,6 @@ export default function Home() {
 
   const isEditingNewRow = editingId === NEW_TASK_ROW_ID;
 
-  const commitCompletedInlineTags = (
-    taskId: string,
-    value: string,
-    caret: number | null
-  ): { nextValue: string; nextCaret: number | null; committed: string[] } => {
-    // Commit ONLY completed tag tokens (terminated by whitespace) into task.tags[],
-    // and strip them from the editable text.
-    //
-    // NOTE: We purposely do NOT scan/commit on every keystroke; callers should invoke
-    // this only when the user inserts whitespace or on explicit commit (blur/save).
-    const TAG_TOKEN_TERMINATED_BY_SPACE = /(^|\s)#([a-zA-Z0-9_-]+)(?=\s)/g;
-
-    const committed: string[] = [];
-    let nextCaret = caret;
-
-    let out = '';
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = TAG_TOKEN_TERMINATED_BY_SPACE.exec(value))) {
-      const leading = match[1] ?? '';
-      const tag = match[2] ?? '';
-      const fullStart = match.index;
-      const tokenStart = fullStart + leading.length;
-      const tokenEnd = tokenStart + 1 + tag.length;
-
-      out += value.slice(lastIndex, fullStart);
-      out += leading;
-      lastIndex = tokenEnd;
-
-      const normalized = String(tag).toLowerCase();
-      if (normalized) committed.push(normalized);
-
-      if (typeof nextCaret === 'number' && tokenEnd <= nextCaret) {
-        const removedLen = tokenEnd - fullStart;
-        const addedLen = leading.length;
-        nextCaret = Math.max(0, nextCaret - (removedLen - addedLen));
-      }
-    }
-
-    if (lastIndex === 0) {
-      return { nextValue: value, nextCaret, committed: [] };
-    }
-
-    out += value.slice(lastIndex);
-    const nextValue = out.replace(/[ \t]{2,}/g, ' ');
-    if (typeof nextCaret === 'number') {
-      nextCaret = Math.min(nextValue.length, nextCaret);
-    }
-
-    if (committed.length > 0) {
-      setAllTasks(prev =>
-        prev.map(t => {
-          if (t.id !== taskId) return t;
-          const merged = Array.from(
-            new Set([...(t.tags ?? []), ...committed.map(x => x.toLowerCase())])
-          );
-          return { ...t, tags: merged, meta: { tags: merged } };
-        })
-      );
-    }
-
-    return { nextValue, nextCaret, committed: Array.from(new Set(committed)) };
-  };
-
   const MAX_RECENT_VIEWS = 8;
   // Recent views are ephemeral shortcuts, not saved state.
   // Recent views are capped internally but rendered freely by layout.
@@ -334,6 +265,34 @@ export default function Home() {
       )
     );
   };
+
+  const editingController = createEditingController({
+    tasks,
+    editingId,
+    editingText,
+    NEW_TASK_ROW_ID,
+    setAllTasks,
+    setUndoStack,
+    setActiveTaskId,
+    setEditingId,
+    setEditingText,
+    setCaretPos,
+    caretInitializedRef,
+    editingOriginalRef,
+    createId,
+    parseTaskInput,
+    commitTaskText,
+  });
+
+  const {
+    commitCompletedInlineTags,
+    commitNewTaskFromRow,
+    cancelNewRowEdit,
+    startEditing,
+    commitActiveEditIfAny,
+    saveEdit,
+    splitTaskAt,
+  } = editingController;
 
   const cycleIntent = (current: Task['intent'] | undefined): Task['intent'] | undefined => {
     if (!current) return 'now';
@@ -699,53 +658,6 @@ useEffect(() => {
   return () => window.removeEventListener('keydown', handler, true);
 }, [undoStack, tasks, activeTaskId, editingId, setAllTasks]);
 
-  /* =======================
-     Task Actions
-  ======================= */
-
-  const commitNewTaskFromRow = () => {
-    const raw = editingText;
-    const parsed = parseTaskInput(raw);
-
-    // Require at least text or tags.
-    if (parsed.text.length === 0 && parsed.tags.length === 0) return;
-
-    const now = Date.now();
-    const id = createId();
-
-    setAllTasks(prev => [
-      {
-        id,
-        text: parsed.text,
-        createdAt: now,
-        order: now,
-        completed: false,
-        archived: false,
-        indent: 0,
-        tags: parsed.tags,
-        ...(parsed.intent ? { intent: parsed.intent } : { intent: 'now' }),
-        momentum: parsed.momentum === true,
-        meta: { tags: parsed.tags },
-      },
-      ...prev,
-    ]);
-
-    // Keep capture row active + ready for the next thought.
-    setActiveTaskId(NEW_TASK_ROW_ID);
-    setEditingId(NEW_TASK_ROW_ID);
-    setEditingText('');
-    setCaretPos(0);
-    caretInitializedRef.current = false;
-  };
-
-  const cancelNewRowEdit = () => {
-    if (editingId !== NEW_TASK_ROW_ID) return;
-    setEditingId(null);
-    setEditingText('');
-    setCaretPos(null);
-    caretInitializedRef.current = false;
-  };
-
   const toggleCompleted = (task: Task) => {
     // Push undo snapshot BEFORE mutation
     setUndoStack(stack => [
@@ -787,61 +699,6 @@ useEffect(() => {
   };
   
 
-  function startEditing(task: Task, caret: number) {
-    // Leaving the field === commit intent.
-    // When switching edits, commit the current edit first.
-    if (editingId && editingId !== task.id) {
-      const current = tasks.find(t => t.id === editingId) ?? null;
-      if (current) saveEdit(current);
-    }
-    setEditingId(task.id);
-    setEditingText(task.text);
-    setCaretPos(clampCaret(caret ?? task.text.length ?? 0, task.text.length));
-    caretInitializedRef.current = false;
-    editingOriginalRef.current = { taskId: task.id, snapshot: task };
-  }
-
-  const commitActiveEditIfAny = () => {
-    if (!editingId) return;
-    const current = tasks.find(t => t.id === editingId) ?? null;
-    if (!current) return;
-    saveEdit(current);
-  };
-
-  const saveEdit = (task: Task) => {
-    const originalSnapshot = getOriginalSnapshot(editingOriginalRef.current, task);
-
-    // Tags are canonical state and are NOT derived from text.
-    // However, if the user typed new `#tags` in the editor, commit them now (and strip from text).
-    const parsed = parseTaskInput(editingText);
-    const addedTags = getAddedTags(originalSnapshot.tags ?? [], parsed.tags);
-    const textChanged = parsed.text !== originalSnapshot.text;
-    const shouldCommit = shouldCommitEdit({
-      textChanged,
-      addedTagsCount: addedTags.length,
-      hasIntent: parsed.intent !== undefined,
-      hasMomentum: parsed.momentum === true,
-    });
-
-    if (shouldCommit && editingText !== task.text) {
-  setUndoStack(stack => [
-    ...stack,
-    { type: 'edit', task: originalSnapshot },
-  ]);
-
-  commitTaskText(task.id, editingText, {
-    preserveExistingIntent: true,
-  });
-}
-      
-      
-
-    setEditingId(null);
-    setEditingText('');
-    setCaretPos(null);
-    editingOriginalRef.current = null;
-  };
-
   const toggleMomentum = (task: Task) => {
     setUndoStack(stack => pushUndo(stack, { type: 'edit', task }));    setAllTasks(prev =>
       prev.map(t =>
@@ -865,91 +722,6 @@ useEffect(() => {
     setAllTasks(prev => removeTagFromTasks(prev, task.id, tag));
     
   
-  };
-
-  const splitTaskAt = (task: Task, index: number, cursor: number) => {
-    const createdId = createId();
-    const createdAt = Date.now();
-
-    const before = editingText.slice(0, cursor);
-    const after = editingText.slice(cursor);
-
-    // Tags are canonical state and are NOT derived from text.
-    // Split affects text only; tags stay on the original (left) task unless explicitly removed.
-    const leftParsed = parseTaskInput(before);
-    const rightParsed = parseTaskInput(after);
-    const originalParsed = parseTaskInput(editingText);
-
-    const leftText = leftParsed.text;
-    const rightText = rightParsed.text;
-    const originalText = originalParsed.text;
-
-    // If the user typed new tags in this edit session and presses Enter (split),
-    // those tags must be committed to the canonical tag state (left/original row).
-    const originalTags = Array.from(new Set([...(task.tags ?? []), ...originalParsed.tags]));
-
-    // Undo should restore the original row and caret position, and remove the created row.
-    setUndoStack(stack => [
-      ...stack,
-      {
-        type: 'split',
-        original: {
-          ...task,
-          text: originalText,
-          tags: originalTags,
-          intent: originalParsed.intent,
-          meta: { ...(task.meta ?? {}), tags: originalTags },
-        },
-        createdId,
-        cursor,
-      },
-    ]);
-    
-
-    setAllTasks(prev => {
-      const next = [...prev];
-      const currentIndex = next.findIndex(t => t.id === task.id);
-      const safeIndex = currentIndex >= 0 ? currentIndex : index;
-
-      const current = next[safeIndex];
-      if (!current) return prev;
-
-      next[safeIndex] = {
-        ...current,
-        text: leftText,
-        tags: originalTags,
-        ...(leftParsed.intent ? { intent: leftParsed.intent } : { intent: undefined }),
-        ...(leftParsed.momentum ? { momentum: true } : {}),
-        meta: { tags: originalTags },
-      };
-      const newTask: Task = {
-        id: createdId,
-        text: rightText,
-        createdAt,
-        order: createdAt,
-        completed: false,
-        archived: false,
-        indent: current.indent,
-        tags: [],
-        ...(rightParsed.intent ? { intent: rightParsed.intent } : {}),
-        momentum: rightParsed.momentum === true,
-        meta: { tags: [] },
-      };
-      next.splice(safeIndex + 1, 0, newTask);
-
-      console.log(
-        'POST-SPLIT TASKS:',
-        next.map(t => ({ id: t.id, text: t.text, tags: t.tags }))
-      );
-
-      return next;
-    });
-
-    setActiveTaskId(createdId);
-    setEditingId(createdId);
-    setEditingText(rightText);
-    setCaretPos(0);
-    caretInitializedRef.current = false;
   };
 
   const handleTextareaKeyDown = (
