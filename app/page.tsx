@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
@@ -25,6 +25,7 @@ import {
 } from '../lib/views';
 import { useUIStatePersistence } from '../lib/uiState';
 import { useDragController } from '../lib/dragController';
+import { useFocusController } from '../lib/focusController';
 
 /* =======================
    Types
@@ -90,8 +91,6 @@ export default function Home() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
-  const [caretPos, setCaretPos] = useState<number | null>(null);
-  const caretInitializedRef = useRef(false);
 
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   
@@ -102,12 +101,17 @@ export default function Home() {
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newRowRef = useRef<HTMLDivElement | null>(null);
-
-  const pendingFocusRef = useRef<
-    | { taskId: string; mode: 'row' | 'edit'; caret?: number }
-    | null
-  >(null);
   const editingOriginalRef = useRef<{ taskId: string; snapshot: Task } | null>(null);
+  const { caretPos, setCaretPos, resetCaretInitialized, setPendingFocus, caretOffsetFromPoint } =
+    useFocusController({
+      tasks,
+      editingId,
+      setActiveTaskId,
+      setEditingId,
+      setEditingText,
+      rowRefs,
+      editInputRef,
+    });
   const { isRestoringUI } = useUIStatePersistence({
     tasks,
     activeTaskId,
@@ -117,7 +121,7 @@ export default function Home() {
     setEditingId,
     setEditingText,
     setCaretPos,
-    caretInitializedRef,
+    resetCaretInitialized,
   });
   const { handlePointerDown } = useDragController<Task, UndoAction>({
     tasks,
@@ -256,7 +260,7 @@ export default function Home() {
     setEditingId,
     setEditingText,
     setCaretPos,
-    caretInitializedRef,
+    resetCaretInitialized,
     editingOriginalRef,
     createId,
     parseTaskInput,
@@ -322,53 +326,6 @@ const handleTagSearchClick = (rawTag: string) => {
   });
 };
 
-  const getCaretOffsetFromPoint = (
-    container: HTMLElement,
-    x: number,
-    y: number
-  ): number | null => {
-    const doc = container.ownerDocument;
-    const anyDoc = doc as unknown as {
-      caretPositionFromPoint?: (x: number, y: number) => {
-        offsetNode: Node;
-        offset: number;
-      } | null;
-      caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    };
-
-    let node: Node | null = null;
-    let offset = 0;
-
-    if (typeof anyDoc.caretPositionFromPoint === 'function') {
-      const pos = anyDoc.caretPositionFromPoint(x, y);
-      if (pos) {
-        node = pos.offsetNode;
-        offset = pos.offset;
-      }
-    } else if (typeof anyDoc.caretRangeFromPoint === 'function') {
-      const range = anyDoc.caretRangeFromPoint(x, y);
-      if (range) {
-        node = range.startContainer;
-        offset = range.startOffset;
-      }
-    }
-
-    if (!node || !container.contains(node)) return null;
-
-    const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    let current = walker.nextNode();
-    let count = 0;
-
-    while (current) {
-      const text = current.textContent ?? '';
-      if (current === node) return count + offset;
-      count += text.length;
-      current = walker.nextNode();
-    }
-
-    return null;
-  };
-
   /* =======================
      Lifecycle
   ======================= */
@@ -382,46 +339,6 @@ const handleTagSearchClick = (rawTag: string) => {
     });
   }, []);
 
-  useLayoutEffect(() => {
-    if (!editingId) return;
-    if (caretInitializedRef.current) return;
-
-    const el = editInputRef.current;
-    if (!el) return;
-
-    el.focus();
-
-    const pos =
-      typeof caretPos === 'number'
-        ? caretPos
-        : el.value.length;
-
-    el.setSelectionRange(pos, pos);
-
-    caretInitializedRef.current = true;
-  }, [editingId, caretPos]);
-
-  useEffect(() => {
-    const el = editInputRef.current;
-    if (!editingId || !el) return;
-
-    const updateCaret = () => {
-      const pos = el.selectionStart ?? null;
-      if (pos === null || Number.isNaN(pos)) return;
-      setCaretPos(pos);
-    };
-
-    el.addEventListener('select', updateCaret);
-    el.addEventListener('keyup', updateCaret);
-    el.addEventListener('mouseup', updateCaret);
-
-    return () => {
-      el.removeEventListener('select', updateCaret);
-      el.removeEventListener('keyup', updateCaret);
-      el.removeEventListener('mouseup', updateCaret);
-    };
-  }, [editingId]);
-
   useEffect(() => {
     // The persistent capture row is always present.
     // Keep it as the default active row unless the user activates a specific task.
@@ -431,31 +348,6 @@ const handleTagSearchClick = (rawTag: string) => {
   }, [tasks, activeTaskId]);
 
   // UI state persistence + restoration moved to lib/uiState.ts
-
-  useEffect(() => {
-    const pending = pendingFocusRef.current;
-    if (!pending) return;
-
-    const nextIndex = tasks.findIndex(t => t.id === pending.taskId);
-    if (nextIndex < 0) return;
-
-    setActiveTaskId(pending.taskId);
-
-    if (pending.mode === 'edit') {
-      const nextTask = tasks[nextIndex];
-      setEditingId(nextTask.id);
-      setEditingText(nextTask.text);
-      setCaretPos(pending.caret ?? nextTask.text.length);
-      caretInitializedRef.current = false;
-    }
-
-    requestAnimationFrame(() => {
-      if (pending.mode === 'row') {
-        rowRefs.current[nextIndex]?.focus();
-      }
-      pendingFocusRef.current = null;
-    });
-  }, [tasks]);
 
   // UI state persistence + restoration moved to lib/uiState.ts
 
@@ -534,7 +426,7 @@ useEffect(() => {
         /* ------------------------------------------------------------
          * Focus restoration (type-safe narrowing)
          * ---------------------------------------------------------- */
-        pendingFocusRef.current = getUndoPendingFocus(action);
+        setPendingFocus(getUndoPendingFocus(action));
       
         /* ------------------------------------------------------------
          * Apply undo
@@ -673,7 +565,7 @@ useEffect(() => {
       setEditingId(prev.id);
       setEditingText(merged);
       setCaretPos(prev.text.length);
-      caretInitializedRef.current = false;
+      resetCaretInitialized();
       return;
     }
 
@@ -694,7 +586,7 @@ useEffect(() => {
       setEditingId(prevTask.id);
       setEditingText(prevTask.text);
       setCaretPos(prevTask.text.length);
-      caretInitializedRef.current = false;
+      resetCaretInitialized();
       return;
     }
 
@@ -715,7 +607,7 @@ useEffect(() => {
       setEditingId(nextTask.id);
       setEditingText(nextTask.text);
       setCaretPos(nextTask.text.length);
-      caretInitializedRef.current = false;
+      resetCaretInitialized();
       return;
     }
 
@@ -911,7 +803,7 @@ useEffect(() => {
       setEditingId(task.id);
       setEditingText(task.text + e.key);
       setCaretPos(task.text.length + 1);
-      caretInitializedRef.current = false;
+      resetCaretInitialized();
     }
   };
 
@@ -1351,7 +1243,7 @@ useEffect(() => {
                 setEditingId(NEW_TASK_ROW_ID);
                 setEditingText('');
                 setCaretPos(0);
-                caretInitializedRef.current = false;
+                resetCaretInitialized();
               }
             }}
             onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1385,7 +1277,7 @@ useEffect(() => {
                 setEditingId(NEW_TASK_ROW_ID);
                 setEditingText(e.key);
                 setCaretPos(1);
-                caretInitializedRef.current = false;
+                resetCaretInitialized();
                 return;
               }
             }}
@@ -1434,7 +1326,7 @@ useEffect(() => {
               setEditingId(NEW_TASK_ROW_ID);
               setEditingText('');
               setCaretPos(0);
-              caretInitializedRef.current = false;
+              resetCaretInitialized();
             }}
             searchQuery={normalizedQuery}
           />
@@ -1508,7 +1400,7 @@ useEffect(() => {
                     setEditingText(res.nextValue);
                     if (typeof res.nextCaret === 'number') {
                       setCaretPos(res.nextCaret);
-                      caretInitializedRef.current = false;
+                      resetCaretInitialized();
                     }
                     return;
                   }
@@ -1521,7 +1413,7 @@ useEffect(() => {
                 onTextareaBlur={() => saveEdit(task)}
                 onTextClick={(e: React.MouseEvent<HTMLDivElement>) => {
                   const el = e.currentTarget;
-                  const caret = getCaretOffsetFromPoint(el, e.clientX, e.clientY);
+                  const caret = caretOffsetFromPoint(el, e.clientX, e.clientY);
                   setActiveTaskId(task.id);
                   startEditing(
                     task,

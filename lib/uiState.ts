@@ -19,7 +19,7 @@ export function useUIStatePersistence(opts: {
   setEditingId: (id: string | null) => void;
   setEditingText: (text: string) => void;
   setCaretPos: (pos: number | null) => void;
-  caretInitializedRef: { current: boolean };
+  resetCaretInitialized: () => void;
 }) {
   const {
     tasks,
@@ -30,7 +30,7 @@ export function useUIStatePersistence(opts: {
     setEditingId,
     setEditingText,
     setCaretPos,
-    caretInitializedRef,
+    resetCaretInitialized,
   } = opts;
 
   const uiRestoredRef = useRef(false);
@@ -97,7 +97,7 @@ export function useUIStatePersistence(opts: {
         if (task) {
           setEditingId(task.id);
           setEditingText(task.text);
-          caretInitializedRef.current = false;
+          resetCaretInitialized();
           if (typeof storedCaret === 'number' && Number.isFinite(storedCaret)) {
             setCaretPos(Math.max(0, Math.min(task.text.length, storedCaret)));
           }

@@ -17,7 +17,7 @@ export type EditingControllerDeps = {
   setEditingText: (text: string) => void;
   setCaretPos: (pos: number | null) => void;
 
-  caretInitializedRef: Ref<boolean>;
+  resetCaretInitialized: () => void;
   editingOriginalRef: Ref<{ taskId: string; snapshot: Task } | null>;
 
   createId: () => string;
@@ -151,7 +151,7 @@ export function createEditingController(deps: EditingControllerDeps) {
     deps.setEditingId(deps.NEW_TASK_ROW_ID);
     deps.setEditingText('');
     deps.setCaretPos(0);
-    deps.caretInitializedRef.current = false;
+    deps.resetCaretInitialized();
   };
 
   const cancelNewRowEdit = () => {
@@ -159,7 +159,7 @@ export function createEditingController(deps: EditingControllerDeps) {
     deps.setEditingId(null);
     deps.setEditingText('');
     deps.setCaretPos(null);
-    deps.caretInitializedRef.current = false;
+    deps.resetCaretInitialized();
   };
 
   const saveEdit = (task: Task) => {
@@ -208,7 +208,7 @@ export function createEditingController(deps: EditingControllerDeps) {
     deps.setEditingId(task.id);
     deps.setEditingText(task.text);
     deps.setCaretPos(clampCaret(caret ?? task.text.length ?? 0, task.text.length));
-    deps.caretInitializedRef.current = false;
+    deps.resetCaretInitialized();
     deps.editingOriginalRef.current = { taskId: task.id, snapshot: task };
   }
 
@@ -293,7 +293,7 @@ export function createEditingController(deps: EditingControllerDeps) {
     deps.setEditingId(createdId);
     deps.setEditingText(rightText);
     deps.setCaretPos(0);
-    deps.caretInitializedRef.current = false;
+    deps.resetCaretInitialized();
   };
 
   return {
