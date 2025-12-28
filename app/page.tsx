@@ -23,6 +23,7 @@ import {
   isTagView as isTagViewFn,
   tokenizeQuery,
 } from '../lib/views';
+import { useUIStatePersistence } from '../lib/uiState';
 
 /* =======================
    Types
@@ -71,7 +72,6 @@ export type UndoAction =
 
 const MAX_INDENT = 2;
 const INDENT_WIDTH = 28;
-const UI_STATE_KEY = 'task_ui_state';
 const NEW_TASK_ROW_ID = '__new__';
 
 /* =======================
@@ -111,37 +111,18 @@ export default function Home() {
     | { taskId: string; mode: 'row' | 'edit'; caret?: number }
     | null
   >(null);
-  const uiRestoredRef = useRef(false);
-  const restoringUIRef = useRef(false);
-  const initialUIStateRef = useRef<
-    | {
-        activeTaskId?: string;
-        editingTaskId?: string;
-        caret?: number;
-      }
-    | null
-  >(null);
   const editingOriginalRef = useRef<{ taskId: string; snapshot: Task } | null>(null);
-
-  if (typeof window !== 'undefined' && initialUIStateRef.current === null) {
-    try {
-      const raw = localStorage.getItem(UI_STATE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          initialUIStateRef.current = parsed;
-          if (
-            (parsed as { activeTaskId?: unknown }).activeTaskId ||
-            (parsed as { editingTaskId?: unknown }).editingTaskId
-          ) {
-            restoringUIRef.current = true;
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
+  const { isRestoringUI } = useUIStatePersistence({
+    tasks,
+    activeTaskId,
+    editingId,
+    caretPos,
+    setActiveTaskId,
+    setEditingId,
+    setEditingText,
+    setCaretPos,
+    caretInitializedRef,
+  });
 
   const createId = () =>
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -389,7 +370,7 @@ const handleTagSearchClick = (rawTag: string) => {
   ======================= */
 
   useEffect(() => {
-    if (restoringUIRef.current) return;
+    if (isRestoringUI) return;
     // Default focus target is the capture row at the top.
     // This allows immediate typing without hunting for a special input.
     requestAnimationFrame(() => {
@@ -445,48 +426,7 @@ const handleTagSearchClick = (rawTag: string) => {
     }
   }, [tasks, activeTaskId]);
 
-  useEffect(() => {
-    if (uiRestoredRef.current) return;
-    if (tasks.length === 0) return;
-
-    uiRestoredRef.current = true;
-
-    try {
-      const raw =
-        initialUIStateRef.current ?? JSON.parse(localStorage.getItem(UI_STATE_KEY) ?? 'null');
-      if (!raw) return;
-      const parsed = raw;
-      if (!parsed || typeof parsed !== 'object') return;
-
-      const storedActive = (parsed as { activeTaskId?: unknown }).activeTaskId;
-      const storedEditing = (parsed as { editingTaskId?: unknown }).editingTaskId;
-      const storedCaret = (parsed as { caret?: unknown }).caret;
-
-      const hasActive =
-        typeof storedActive === 'string' && tasks.some(t => t.id === storedActive);
-      const hasEditing =
-        typeof storedEditing === 'string' &&
-        tasks.some(t => t.id === storedEditing);
-
-      if (hasActive) setActiveTaskId(storedActive as string);
-
-      if (hasEditing) {
-        const task = tasks.find(t => t.id === storedEditing) ?? null;
-        if (task) {
-          setEditingId(task.id);
-          setEditingText(task.text);
-          caretInitializedRef.current = false;
-          if (typeof storedCaret === 'number' && Number.isFinite(storedCaret)) {
-            setCaretPos(Math.max(0, Math.min(task.text.length, storedCaret)));
-          }
-        }
-      }
-    } catch {
-      // Fail silently
-    }
-
-    restoringUIRef.current = false;
-  }, [tasks]);
+  // UI state persistence + restoration moved to lib/uiState.ts
 
   useEffect(() => {
     const pending = pendingFocusRef.current;
@@ -513,20 +453,7 @@ const handleTagSearchClick = (rawTag: string) => {
     });
   }, [tasks]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        UI_STATE_KEY,
-        JSON.stringify({
-          activeTaskId,
-          editingTaskId: editingId,
-          caret: caretPos,
-        })
-      );
-    } catch {
-      // Ignore persistence errors for UI state
-    }
-  }, [activeTaskId, editingId, caretPos]);
+  // UI state persistence + restoration moved to lib/uiState.ts
 
   useEffect(() => {
     if (!searchQuery) return;
