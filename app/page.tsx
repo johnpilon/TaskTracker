@@ -5,7 +5,7 @@ import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 import { parseTaskMeta } from '../lib/parseTaskMeta';
-import { applyUndo } from '../lib/undo';
+import { applyUndo, getUndoPendingFocus } from '../lib/undo';
 import { cn } from '../lib/utils';
 
 /* =======================
@@ -37,7 +37,7 @@ export type TaskIntent = 'now' | 'soon' | 'later' | null;
 type SearchViewState = { type: 'search'; query: string };
 type ViewState = SearchViewState | { type: 'momentum' };
 
-type UndoAction =
+export type UndoAction =
   | { type: 'delete'; task: Task; index: number }
   | { type: 'edit'; task: Task }
   | { type: 'toggle'; task: Task }
@@ -669,36 +669,7 @@ useEffect(() => {
         /* ------------------------------------------------------------
          * Focus restoration (type-safe narrowing)
          * ---------------------------------------------------------- */
-        switch (action.type) {
-          case 'split':
-            pendingFocusRef.current = {
-              taskId: action.original.id,
-              mode: 'edit',
-              caret: action.cursor,
-            };
-            break;
-      
-          case 'merge':
-            pendingFocusRef.current =
-              action.direction === 'backward'
-                ? { taskId: action.removed.id, mode: 'edit', caret: 0 }
-                : {
-                    taskId: action.keptOriginal.id,
-                    mode: 'edit',
-                    caret: action.caret,
-                  };
-            break;
-      
-          case 'delete':
-          case 'edit':
-          case 'toggle':
-          case 'indent':
-            pendingFocusRef.current = {
-              taskId: action.task.id,
-              mode: 'row',
-            };
-            break;
-        }
+        pendingFocusRef.current = getUndoPendingFocus(action);
       
         /* ------------------------------------------------------------
          * Apply undo

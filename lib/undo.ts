@@ -1,19 +1,8 @@
-import type { Task } from '../app/page';
+import type { Task, UndoAction } from '../app/page';
 
-type UndoAction =
-  | { type: 'delete'; task: Task; index: number }
-  | { type: 'edit'; task: Task }
-  | { type: 'toggle'; task: Task }
-  | { type: 'indent'; task: Task }
-  | { type: 'split'; original: Task; createdId: string; cursor: number }
-  | {
-      type: 'merge';
-      direction: 'backward' | 'forward';
-      keptOriginal: Task;
-      removed: Task;
-      caret: number;
-    }
-  | null;
+export type PendingFocus =
+  | { taskId: string; mode: 'row' }
+  | { taskId: string; mode: 'edit'; caret: number };
 
 export function applyUndo(prev: Task[], action: UndoAction): Task[] {
   if (!action) return prev;
@@ -58,4 +47,23 @@ export function applyUndo(prev: Task[], action: UndoAction): Task[] {
   }
 }
 
+export function getUndoPendingFocus(action: UndoAction): PendingFocus | null {
+  if (!action) return null;
+
+  switch (action.type) {
+    case 'split':
+      return { taskId: action.original.id, mode: 'edit', caret: action.cursor };
+
+    case 'merge':
+      return action.direction === 'backward'
+        ? { taskId: action.removed.id, mode: 'edit', caret: 0 }
+        : { taskId: action.keptOriginal.id, mode: 'edit', caret: action.caret };
+
+    case 'delete':
+    case 'edit':
+    case 'toggle':
+    case 'indent':
+      return { taskId: action.task.id, mode: 'row' };
+  }
+}
 
