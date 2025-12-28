@@ -5,7 +5,7 @@ import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 import { parseTaskMeta } from '../lib/parseTaskMeta';
-import { applyUndo, getUndoPendingFocus } from '../lib/undo';
+import { applyUndo, getUndoPendingFocus, pushUndo } from '../lib/undo';
 import { cn } from '../lib/utils';
 
 /* =======================
@@ -357,6 +357,7 @@ const handleTagSearchClick = (rawTag: string) => {
   setSearchQuery(prev => {
     const current = prev.trim().toLowerCase();
     if (current.length === 0) return clicked;
+
 
     const tokens = tokenizeQuery(current);
     const isTagOnly = tokens.every(t => t.startsWith('#') && t.length > 1);
@@ -831,7 +832,7 @@ useEffect(() => {
   };
 
   const toggleMomentum = (task: Task) => {
-    setUndoStack(stack => [...stack, { type: 'edit', task }]);    setAllTasks(prev =>
+    setUndoStack(stack => pushUndo(stack, { type: 'edit', task }));    setAllTasks(prev =>
       prev.map(t =>
         t.id === task.id
           ? { ...t, momentum: t.momentum === true ? false : true }
@@ -1024,7 +1025,7 @@ useEffect(() => {
 
       // Commit this row text before switching
       if (editingText !== task.text) {
-        setUndoStack(stack => [...stack, { type: 'edit', task }]);        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
+        setUndoStack(stack => pushUndo(stack, { type: 'edit', task }));        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const prevTask = tasks[index - 1];
@@ -1045,7 +1046,7 @@ useEffect(() => {
       if (index >= tasks.length - 1) return;
 
       if (editingText !== task.text) {
-        setUndoStack(stack => [...stack, { type: 'edit', task }]);        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
+        setUndoStack(stack => pushUndo(stack, { type: 'edit', task }));        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const nextTask = tasks[index + 1];
@@ -1961,7 +1962,7 @@ setUndoStack(stack => [
                     editingOriginalRef.current.taskId !== task.id
                   ) {
                     editingOriginalRef.current = { taskId: task.id, snapshot: task };
-                    setUndoStack(stack => [...stack, { type: 'edit', task }]);                  }
+                    setUndoStack(stack => pushUndo(stack, { type: 'edit', task }));                  }
 
                   // Tag commit is canonical and must never delete tags.
                   // To avoid re-parsing tags on every keystroke, only scan/commit when the user

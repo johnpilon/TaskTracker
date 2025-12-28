@@ -67,3 +67,7 @@ export function getUndoPendingFocus(action: UndoAction): PendingFocus | null {
   }
 }
 
+export function pushUndo(prev: UndoAction[], action: UndoAction): UndoAction[] {
+  return [...prev, action];
+}
+
