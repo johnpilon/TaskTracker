@@ -315,9 +315,6 @@ const handleTagSearchClick = (rawTag: string) => {
   });
 };
 
-
-  // filterTasksBySearch extracted to lib/views.ts
-
   const getCaretOffsetFromPoint = (
     container: HTMLElement,
     x: number,
