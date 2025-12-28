@@ -13,6 +13,12 @@ import {
   nextIndexFromRowArrow,
   shouldIgnoreTab,
 } from '../lib/keyboard';
+import {
+  clampCaret,
+  getAddedTags,
+  getOriginalSnapshot,
+  shouldCommitEdit,
+} from '../lib/editing';
 import { cn } from '../lib/utils';
 
 /* =======================
@@ -790,7 +796,7 @@ useEffect(() => {
     }
     setEditingId(task.id);
     setEditingText(task.text);
-    setCaretPos(caret ?? task.text.length ?? 0);
+    setCaretPos(clampCaret(caret ?? task.text.length ?? 0, task.text.length));
     caretInitializedRef.current = false;
     editingOriginalRef.current = { taskId: task.id, snapshot: task };
   }
@@ -803,19 +809,19 @@ useEffect(() => {
   };
 
   const saveEdit = (task: Task) => {
-    const originalSnapshot =
-      editingOriginalRef.current && editingOriginalRef.current.taskId === task.id
-        ? editingOriginalRef.current.snapshot
-        : task;
+    const originalSnapshot = getOriginalSnapshot(editingOriginalRef.current, task);
 
     // Tags are canonical state and are NOT derived from text.
     // However, if the user typed new `#tags` in the editor, commit them now (and strip from text).
     const parsed = parseTaskInput(editingText);
-    const existingTags = new Set((originalSnapshot.tags ?? []).map(t => t.toLowerCase()));
-    const addedTags = parsed.tags.filter(t => !existingTags.has(t.toLowerCase()));
+    const addedTags = getAddedTags(originalSnapshot.tags ?? [], parsed.tags);
     const textChanged = parsed.text !== originalSnapshot.text;
-    const shouldCommit =
-      textChanged || addedTags.length > 0 || parsed.intent !== undefined || parsed.momentum === true;
+    const shouldCommit = shouldCommitEdit({
+      textChanged,
+      addedTagsCount: addedTags.length,
+      hasIntent: parsed.intent !== undefined,
+      hasMomentum: parsed.momentum === true,
+    });
 
     if (shouldCommit && editingText !== task.text) {
   setUndoStack(stack => [
