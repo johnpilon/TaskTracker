@@ -1,3 +1,5 @@
+/* stylelint-disable at-rule-no-unknown */
+/* Tailwind CSS directives (@tailwind, @layer, @apply) are expanded at build time. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -108,3 +110,5 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* stylelint-enable at-rule-no-unknown */

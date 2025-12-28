@@ -78,7 +78,8 @@ export default function Home() {
   const [caretPos, setCaretPos] = useState<number | null>(null);
   const caretInitializedRef = useRef(false);
 
-  const [undoAction, setUndoAction] = useState<UndoAction>(null);
+  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
+  
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   const dragIndexRef = useRef<number | null>(null);
@@ -327,31 +328,47 @@ export default function Home() {
     return undefined;
   };
 
-  // Tag clicks compose only with other tags.
-  // Text searches are exploratory and replaced by tag views.
-  const handleTagSearchClick = (rawTag: string) => {
-    const clicked = `#${rawTag.trim().toLowerCase()}`;
-    if (clicked === '#') return;
-    if (editingId) {
-      const current = tasks.find(t => t.id === editingId) ?? null;
-      if (current) saveEdit(current);
+// Tag clicks compose only with other tags.
+// Text searches are exploratory and replaced by tag views.
+const handleTagSearchClick = (rawTag: string) => {
+  const clicked = `#${rawTag.trim().toLowerCase()}`;
+  if (clicked === '#') return;
+
+  // If currently editing, commit the edit before switching search context
+  if (editingId) {
+    const current = tasks.find(t => t.id === editingId) ?? null;
+    if (current) {
+      const originalSnapshot = structuredClone(current);
+
+      setUndoStack(stack => [
+        ...stack,
+        { type: 'edit', task: originalSnapshot },
+      ]);
+
+      commitTaskText(current.id, editingText, {
+        preserveExistingIntent: true,
+      });
+
+      setEditingId(null);
     }
+  }
 
-    setSearchQuery(prev => {
-      const current = prev.trim().toLowerCase();
-      if (current.length === 0) return clicked;
+  setSearchQuery(prev => {
+    const current = prev.trim().toLowerCase();
+    if (current.length === 0) return clicked;
 
-      const tokens = tokenizeQuery(current);
-      const isTagOnly = tokens.every(t => t.startsWith('#') && t.length > 1);
+    const tokens = tokenizeQuery(current);
+    const isTagOnly = tokens.every(t => t.startsWith('#') && t.length > 1);
 
-      // If any non-tag token exists, replace with just the clicked tag.
-      if (!isTagOnly) return clicked;
+    // If any non-tag token exists, replace with just the clicked tag.
+    if (!isTagOnly) return clicked;
 
-      // Tag-only query: compose with AND (space-separated), no duplicates.
-      if (tokens.includes(clicked)) return prev;
-      return [...tokens, clicked].join(' ');
-    });
-  };
+    // Tag-only query: compose with AND (space-separated), no duplicates.
+    if (tokens.includes(clicked)) return prev;
+    return [...tokens, clicked].join(' ');
+  });
+};
+
 
   const filterTasksBySearch = (task: Task, query: string): boolean => {
     const tokens = tokenizeQuery(query);
@@ -589,143 +606,161 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [searchQuery]);
 
-  /* =======================
-     Undo
-  ======================= */
+/* =======================
+   Undo
+======================= */
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // Global keyboard navigation (only when focus is inside the list and not editing)
-      if (!editingId && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-        const activeEl = document.activeElement as HTMLElement | null;
-        const inList = !!(activeEl && listRef.current?.contains(activeEl));
+useEffect(() => {
+  const handler = (e: KeyboardEvent) => {
+    /* ------------------------------------------------------------
+     * Arrow-key navigation (unchanged)
+     * ---------------------------------------------------------- */
+    if (!editingId && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const inList = !!(activeEl && listRef.current?.contains(activeEl));
 
-        // Don't hijack arrows when not interacting with the list.
-        if (inList && tasks.length > 0) {
-          e.preventDefault();
-
-          const currentIndex =
-            activeTaskId === NEW_TASK_ROW_ID
-              ? -1
-              : tasks.findIndex(t => t.id === activeTaskId);
-
-          // When the capture row is active, ArrowUp should keep you there.
-          if (currentIndex === -1 && e.key === 'ArrowUp') return;
-
-          const safeIndex = currentIndex >= 0 ? currentIndex : -1;
-          const nextIndex =
-            e.key === 'ArrowDown'
-              ? Math.min(tasks.length - 1, safeIndex + 1)
-              : Math.max(0, safeIndex - 1);
-
-          const nextId = tasks[nextIndex]?.id;
-          const nextTask = tasks[nextIndex];
-          if (nextId && nextTask) {
-            setActiveTaskId(nextId);
-
-            // If the user is navigating from within the row (not from a control),
-            // jump straight into edit mode for the next item.
-            const fromControl =
-              !!activeEl?.closest('input[type="checkbox"],button');
-
-            if (!fromControl) {
-              startEditing(nextTask, nextTask.text.length);
-            } else {
-              requestAnimationFrame(() => rowRefs.current[nextIndex]?.focus());
-            }
-          }
-          return;
-        }
-      }
-
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && undoAction) {
+      if (inList && tasks.length > 0) {
         e.preventDefault();
 
-        // Prepare post-undo focus/selection behavior before mutating the list.
-        if (undoAction.type === 'split') {
-          pendingFocusRef.current = {
-            taskId: undoAction.original.id,
-            mode: 'edit',
-            caret: undoAction.cursor,
-          };
-        } else if (undoAction.type === 'merge') {
-          pendingFocusRef.current =
-            undoAction.direction === 'backward'
-              ? { taskId: undoAction.removed.id, mode: 'edit', caret: 0 }
-              : {
-                  taskId: undoAction.keptOriginal.id,
-                  mode: 'edit',
-                  caret: undoAction.caret,
-                };
-        } else if (undoAction.type === 'delete') {
-          pendingFocusRef.current = { taskId: undoAction.task.id, mode: 'row' };
-        } else if (
-          undoAction.type === 'edit' ||
-          undoAction.type === 'toggle' ||
-          undoAction.type === 'indent'
-        ) {
-          pendingFocusRef.current = { taskId: undoAction.task.id, mode: 'row' };
-        }
+        const currentIndex =
+          activeTaskId === NEW_TASK_ROW_ID
+            ? -1
+            : tasks.findIndex(t => t.id === activeTaskId);
 
+        // When the capture row is active, ArrowUp should keep you there.
+        if (currentIndex === -1 && e.key === 'ArrowUp') return;
+
+        const safeIndex = currentIndex >= 0 ? currentIndex : -1;
+        const nextIndex =
+          e.key === 'ArrowDown'
+            ? Math.min(tasks.length - 1, safeIndex + 1)
+            : Math.max(0, safeIndex - 1);
+
+        const nextTask = tasks[nextIndex];
+        if (nextTask) {
+          setActiveTaskId(nextTask.id);
+
+          const fromControl =
+            !!activeEl?.closest('input[type="checkbox"],button');
+
+          if (!fromControl) {
+            startEditing(nextTask, nextTask.text.length);
+          } else {
+            requestAnimationFrame(() =>
+              rowRefs.current[nextIndex]?.focus()
+            );
+          }
+        }
+        return;
+      }
+    }
+
+  
+      /* ------------------------------------------------------------
+       * UNDO (Ctrl/Cmd + Z)
+       * ---------------------------------------------------------- */
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+      
+        const action = undoStack[undoStack.length - 1];
+        if (!action) return; // ⬅️ this line silences ALL “possibly null” errors
+      
+        /* ------------------------------------------------------------
+         * Focus restoration (type-safe narrowing)
+         * ---------------------------------------------------------- */
+        switch (action.type) {
+          case 'split':
+            pendingFocusRef.current = {
+              taskId: action.original.id,
+              mode: 'edit',
+              caret: action.cursor,
+            };
+            break;
+      
+          case 'merge':
+            pendingFocusRef.current =
+              action.direction === 'backward'
+                ? { taskId: action.removed.id, mode: 'edit', caret: 0 }
+                : {
+                    taskId: action.keptOriginal.id,
+                    mode: 'edit',
+                    caret: action.caret,
+                  };
+            break;
+      
+          case 'delete':
+          case 'edit':
+          case 'toggle':
+          case 'indent':
+            pendingFocusRef.current = {
+              taskId: action.task.id,
+              mode: 'row',
+            };
+            break;
+        }
+      
+        /* ------------------------------------------------------------
+         * Apply undo
+         * ---------------------------------------------------------- */
         setAllTasks(prev => {
-          switch (undoAction.type) {
+          switch (action.type) {
             case 'delete': {
               const next = [...prev];
-              next.splice(undoAction.index, 0, undoAction.task);
+              next.splice(action.index, 0, action.task);
               return next;
             }
-
+      
             case 'edit':
             case 'toggle':
             case 'indent':
               return prev.map(t =>
-                t.id === undoAction.task.id ? undoAction.task : t
+                t.id === action.task.id ? action.task : t
               );
-
+      
             case 'split': {
               const next = [...prev];
-              const originalIndex = next.findIndex(t => t.id === undoAction.original.id);
-              if (originalIndex >= 0) {
-                next[originalIndex] = undoAction.original;
-              }
-              const createdIndex = next.findIndex(t => t.id === undoAction.createdId);
-              if (createdIndex >= 0) {
-                next.splice(createdIndex, 1);
-              }
+      
+              const originalIndex = next.findIndex(
+                t => t.id === action.original.id
+              );
+              if (originalIndex >= 0) next[originalIndex] = action.original;
+      
+              const createdIndex = next.findIndex(
+                t => t.id === action.createdId
+              );
+              if (createdIndex >= 0) next.splice(createdIndex, 1);
+      
               return next;
             }
-
+      
             case 'merge': {
               const next = [...prev];
-
-              // Restore kept task to its pre-merge state
-              const keptIndex = next.findIndex(t => t.id === undoAction.keptOriginal.id);
+              const keptIndex = next.findIndex(
+                t => t.id === action.keptOriginal.id
+              );
+      
               if (keptIndex >= 0) {
-                next[keptIndex] = undoAction.keptOriginal;
-              }
-
-              // Reinsert removed row immediately after kept row (if possible)
-              if (keptIndex >= 0) {
-                next.splice(keptIndex + 1, 0, undoAction.removed);
+                next[keptIndex] = action.keptOriginal;
+                next.splice(keptIndex + 1, 0, action.removed);
               } else {
-                next.push(undoAction.removed);
+                next.push(action.removed);
               }
-
+      
               return next;
             }
-
-            default:
-              return prev;
           }
         });
-
-        setUndoAction(null);
+      
+        setUndoStack(stack => stack.slice(0, -1));
       }
-    };
+        
+        
+    // End handler
+  };
 
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
-  }, [undoAction, tasks, activeTaskId, editingId, setAllTasks]);
+  window.addEventListener('keydown', handler, true);
+  return () => window.removeEventListener('keydown', handler, true);
+}, [undoStack, tasks, activeTaskId, editingId, setAllTasks]);
 
   /* =======================
      Task Actions
@@ -775,33 +810,47 @@ export default function Home() {
   };
 
   const toggleCompleted = (task: Task) => {
-    setUndoAction({ type: 'toggle', task });
+    // Push undo snapshot BEFORE mutation
+    setUndoStack(stack => [
+      ...stack,
+      { type: 'toggle', task },
+    ]);
+  
     setAllTasks(prev =>
       prev.map(t =>
         t.id === task.id
           ? {
               ...t,
               completed: !t.completed,
-              ...(t.completed ? { completedAt: undefined } : { completedAt: Date.now() }),
+              ...(t.completed
+                ? { completedAt: undefined }
+                : { completedAt: Date.now() }),
             }
           : t
       )
     );
   };
+  
 
   const deleteTask = (task: Task) => {
-    // Permanent delete: one click, repeatable, undoable (Ctrl/Cmd+Z).
     setAllTasks(prev => {
       const index = prev.findIndex(t => t.id === task.id);
       if (index < 0) return prev;
-      setUndoAction({ type: 'delete', task, index });
+  
+      // Push undo BEFORE mutation
+      setUndoStack(stack => [
+        ...stack,
+        { type: 'delete', task, index },
+      ]);
+  
       const next = [...prev];
       next.splice(index, 1);
       return next;
     });
   };
+  
 
-  const startEditing = (task: Task, caret: number) => {
+  function startEditing(task: Task, caret: number) {
     // Leaving the field === commit intent.
     // When switching edits, commit the current edit first.
     if (editingId && editingId !== task.id) {
@@ -813,7 +862,7 @@ export default function Home() {
     setCaretPos(caret ?? task.text.length ?? 0);
     caretInitializedRef.current = false;
     editingOriginalRef.current = { taskId: task.id, snapshot: task };
-  };
+  }
 
   const commitActiveEditIfAny = () => {
     if (!editingId) return;
@@ -837,10 +886,18 @@ export default function Home() {
     const shouldCommit =
       textChanged || addedTags.length > 0 || parsed.intent !== undefined || parsed.momentum === true;
 
-    if (shouldCommit) {
-      setUndoAction({ type: 'edit', task: originalSnapshot });
-      commitTaskText(task.id, editingText, { preserveExistingIntent: true });
-    }
+    if (shouldCommit && editingText !== task.text) {
+  setUndoStack(stack => [
+    ...stack,
+    { type: 'edit', task: originalSnapshot },
+  ]);
+
+  commitTaskText(task.id, editingText, {
+    preserveExistingIntent: true,
+  });
+}
+      
+      
 
     setEditingId(null);
     setEditingText('');
@@ -849,8 +906,7 @@ export default function Home() {
   };
 
   const toggleMomentum = (task: Task) => {
-    setUndoAction({ type: 'edit', task });
-    setAllTasks(prev =>
+    setUndoStack(stack => [...stack, { type: 'edit', task }]);    setAllTasks(prev =>
       prev.map(t =>
         t.id === task.id
           ? { ...t, momentum: t.momentum === true ? false : true }
@@ -861,18 +917,33 @@ export default function Home() {
 
   const removeTagFromTask = (task: Task, tag: string) => {
     const needle = tag.toLowerCase();
-    setUndoAction({ type: 'edit', task });
+  
+    // 🔒 SNAPSHOT THE TASK BEFORE MUTATION
+    const taskSnapshot: Task = structuredClone(task);
+
+    // Push undo snapshot (one action per tag removal)
+    setUndoStack(stack => [
+      ...stack,
+      { type: 'edit', task: taskSnapshot },
+    ]);
+    
     setAllTasks(prev =>
       prev.map(t => {
         if (t.id !== task.id) return t;
-        const nextTags = (t.tags ?? []).filter(x => x.toLowerCase() !== needle);
+    
+        const nextTags = (t.tags ?? []).filter(
+          x => x.toLowerCase() !== needle
+        );
+    
         return {
           ...t,
           tags: nextTags,
-          meta: { tags: nextTags },
+          meta: { ...(t.meta ?? {}), tags: nextTags },
         };
       })
     );
+    
+  
   };
 
   const splitTaskAt = (task: Task, index: number, cursor: number) => {
@@ -897,18 +968,22 @@ export default function Home() {
     const originalTags = Array.from(new Set([...(task.tags ?? []), ...originalParsed.tags]));
 
     // Undo should restore the original row and caret position, and remove the created row.
-    setUndoAction({
-      type: 'split',
-      original: {
-        ...task,
-        text: originalText,
-        tags: originalTags,
-        ...(originalParsed.intent ? { intent: originalParsed.intent } : { intent: undefined }),
-        meta: { tags: originalTags },
+    setUndoStack(stack => [
+      ...stack,
+      {
+        type: 'split',
+        original: {
+          ...task,
+          text: originalText,
+          tags: originalTags,
+          intent: originalParsed.intent,
+          meta: { ...(task.meta ?? {}), tags: originalTags },
+        },
+        createdId,
+        cursor,
       },
-      createdId,
-      cursor,
-    });
+    ]);
+    
 
     setAllTasks(prev => {
       const next = [...prev];
@@ -981,13 +1056,17 @@ export default function Home() {
       );
       const mergedIntent = parsed.intent ?? prev.intent;
 
-      setUndoAction({
-        type: 'merge',
-        direction: 'backward',
-        keptOriginal: prev,
-        removed: task,
-        caret: 0,
-      });
+      setUndoStack(stack => [
+        ...stack,
+        {
+          type: 'merge',
+          direction: 'backward',
+          keptOriginal: structuredClone(prev),
+          removed: structuredClone(task),
+          caret: 0,
+        },
+      ]);
+      
 
       setAllTasks(prevTasks => {
         const next = [...prevTasks];
@@ -1020,8 +1099,7 @@ export default function Home() {
 
       // Commit this row text before switching
       if (editingText !== task.text) {
-        setUndoAction({ type: 'edit', task });
-        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
+        setUndoStack(stack => [...stack, { type: 'edit', task }]);        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const prevTask = tasks[index - 1];
@@ -1042,8 +1120,7 @@ export default function Home() {
       if (index >= tasks.length - 1) return;
 
       if (editingText !== task.text) {
-        setUndoAction({ type: 'edit', task });
-        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
+        setUndoStack(stack => [...stack, { type: 'edit', task }]);        commitTaskText(task.id, editingText, { preserveExistingIntent: true });
       }
 
       const nextTask = tasks[index + 1];
@@ -1069,13 +1146,17 @@ export default function Home() {
       );
       const mergedIntent = parsed.intent ?? task.intent;
 
-      setUndoAction({
-        type: 'merge',
-        direction: 'forward',
-        keptOriginal: task,
-        removed: nextTask,
-        caret: editingText.length,
-      });
+      setUndoStack(stack => [
+        ...stack,
+        {
+          type: 'merge',
+          direction: 'forward',
+          keptOriginal: structuredClone(task),
+          removed: structuredClone(nextTask),
+          caret: editingText.length,
+        },
+      ]);
+      
 
       setAllTasks(prevTasks => {
         const next = [...prevTasks];
@@ -1107,12 +1188,25 @@ export default function Home() {
     }
 
     if (e.key === 'Tab') {
+      // Do not indent while actively typing a tag
       if (normalizedQuery.length > 0) {
         e.preventDefault();
         return;
       }
+
       e.preventDefault();
-      setUndoAction({ type: 'indent', task });
+
+      // Snapshot BEFORE mutation for undo
+      const snapshot: Task = structuredClone(task);
+
+      setUndoStack(stack => [
+        ...stack,
+        {
+          type: 'indent',
+          task: snapshot,
+        },
+      ]);
+
       setAllTasks(prev =>
         prev.map(t =>
           t.id === task.id
@@ -1126,9 +1220,13 @@ export default function Home() {
             : t
         )
       );
+
+      return;
     }
 
-    if (e.key === 'Escape') saveEdit(task);
+    if (e.key === 'Escape') {
+      saveEdit(task);
+    }
   };
 
   const handleRowKeyDownCapture = (
@@ -1152,29 +1250,38 @@ export default function Home() {
           ? Math.min(tasks.length - 1, index + 1)
           : Math.max(0, index - 1);
 
-      const nextId = tasks[nextIndex]?.id;
       const nextTask = tasks[nextIndex];
-      if (!nextId || !nextTask) return;
+      if (!nextTask) return;
 
-      setActiveTaskId(nextId);
-      // Arrow navigation should land you ready to edit the next item.
+      setActiveTaskId(nextTask.id);
       startEditing(nextTask, nextTask.text.length);
-
       return;
     }
 
     // Tab / Shift+Tab indents/outdents the selected row anywhere within it.
-    // (When editing, the textarea has its own Tab handler.)
     if (e.key === 'Tab') {
       if (normalizedQuery.length > 0) {
         e.preventDefault();
         return;
       }
+
       e.preventDefault();
 
-      if (activeTaskId !== task.id) setActiveTaskId(task.id);
+      if (activeTaskId !== task.id) {
+        setActiveTaskId(task.id);
+      }
 
-      setUndoAction({ type: 'indent', task });
+      // Snapshot BEFORE mutation for undo
+      const snapshot: Task = structuredClone(task);
+
+      setUndoStack(stack => [
+        ...stack,
+        {
+          type: 'indent',
+          task: snapshot,
+        },
+      ]);
+
       setAllTasks(prev =>
         prev.map(t =>
           t.id === task.id
@@ -1188,6 +1295,7 @@ export default function Home() {
             : t
         )
       );
+
       return;
     }
 
@@ -1213,9 +1321,6 @@ export default function Home() {
       setEditingId(task.id);
       setEditingText(task.text + e.key);
       setCaretPos(task.text.length + 1);
-      // Critical: ensure the textarea takes focus after this render.
-      // Without this, focus stays on the row and each keystroke re-seeds from `task.text`,
-      // appearing as "overwriting" the same character.
       caretInitializedRef.current = false;
     }
   };
@@ -1243,7 +1348,15 @@ export default function Home() {
     dragStartXRef.current = e.clientX;
     baseIndentRef.current = tasks[index].indent;
 
-    setUndoAction({ type: 'indent', task: tasks[index] });
+// Snapshot before indent for undo
+setUndoStack(stack => [
+  ...stack,
+  {
+    type: 'indent',
+    task: structuredClone(tasks[index]),
+  },
+]);
+
 
     const handlePointerMove = (ev: PointerEvent) => {
       if (rafRef.current) return;
@@ -1923,8 +2036,7 @@ export default function Home() {
                     editingOriginalRef.current.taskId !== task.id
                   ) {
                     editingOriginalRef.current = { taskId: task.id, snapshot: task };
-                    setUndoAction({ type: 'edit', task });
-                  }
+                    setUndoStack(stack => [...stack, { type: 'edit', task }]);                  }
 
                   // Tag commit is canonical and must never delete tags.
                   // To avoid re-parsing tags on every keystroke, only scan/commit when the user
