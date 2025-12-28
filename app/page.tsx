@@ -15,6 +15,14 @@ import {
 } from '../lib/keyboard';
 import { createEditingController } from '../lib/editingController';
 import { cn } from '../lib/utils';
+import {
+  applyView,
+  canonicalizeViewQuery,
+  deriveActiveTagTokens,
+  deriveViewState,
+  isTagView as isTagViewFn,
+  tokenizeQuery,
+} from '../lib/views';
 
 /* =======================
    Types
@@ -41,9 +49,6 @@ export interface TaskMeta {
 }
 
 export type TaskIntent = 'now' | 'soon' | 'later' | null;
-
-type SearchViewState = { type: 'search'; query: string };
-type ViewState = SearchViewState | { type: 'momentum' };
 
 export type UndoAction =
   | { type: 'delete'; task: Task; index: number }
@@ -149,7 +154,6 @@ export default function Home() {
   const MAX_RECENT_VIEWS = 8;
   // Recent views are ephemeral shortcuts, not saved state.
   // Recent views are capped internally but rendered freely by layout.
-  const canonicalizeViewQuery = (q: string) => q.trim().replace(/\s+/g, ' ');
   const commitRecentView = (q: string) => {
     const next = canonicalizeViewQuery(q);
     if (next.length === 0) return;
@@ -163,19 +167,6 @@ export default function Home() {
       return [next, ...deduped].slice(0, MAX_RECENT_VIEWS);
     });
   };
-
-  const deriveViewState = (raw: string): SearchViewState | null => {
-    const query = raw.trim().toLowerCase();
-    if (query.length === 0) return null;
-    return { type: 'search', query };
-  };
-
-  const tokenizeQuery = (query: string): string[] =>
-    query
-      .trim()
-      .toLowerCase()
-      .split(/\s+/)
-      .filter(Boolean);
 
   const parseTaskInput = (
     raw: string
@@ -344,35 +335,7 @@ const handleTagSearchClick = (rawTag: string) => {
 };
 
 
-  const filterTasksBySearch = (task: Task, query: string): boolean => {
-    const tokens = tokenizeQuery(query);
-    if (tokens.length === 0) return true;
-
-    const text = task.text.toLowerCase();
-    const tags = task.tags ?? [];
-
-    const tagTokens = tokens.filter(t => t.startsWith('#'));
-    const textTokens = tokens.filter(t => !t.startsWith('#'));
-
-    const textMatch = textTokens.every(t => text.includes(t));
-    const tagMatch = tagTokens.every(t => {
-      const needle = t.slice(1);
-      if (needle.length === 0) return true;
-      return tags.some(tag => tag.toLowerCase().includes(needle));
-    });
-
-    if (tagTokens.length > 0) {
-      console.log('SEARCH CHECK', {
-        query,
-        taskText: task.text,
-        taskTags: task.tags,
-        textMatch,
-        tagMatch,
-      });
-    }
-
-    return textMatch && tagMatch;
-  };
+  // filterTasksBySearch extracted to lib/views.ts
 
   const getCaretOffsetFromPoint = (
     container: HTMLElement,
@@ -1139,27 +1102,8 @@ setUndoStack(stack => [
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const searchViewState = deriveViewState(searchQuery);
   const isMomentumView = isMomentumViewActive;
-  const activeTagTokens = (() => {
-    if (!searchViewState) return [] as string[];
-    const tokens = tokenizeQuery(searchViewState.query);
-    // Normalize + de-dupe while preserving token order.
-    const seen = new Set<string>();
-    const tags: string[] = [];
-    for (const t of tokens) {
-      if (!t.startsWith('#') || t.length <= 1) continue;
-      if (seen.has(t)) continue;
-      seen.add(t);
-      tags.push(t);
-    }
-    return tags;
-  })();
-
-  const isTagView = (() => {
-    if (!searchViewState) return false;
-    const tokens = tokenizeQuery(searchViewState.query);
-    if (tokens.length === 0) return false;
-    return tokens.every(t => t.startsWith('#') && t.length > 1);
-  })();
+  const activeTagTokens = deriveActiveTagTokens(searchViewState);
+  const isTagView = isTagViewFn(searchViewState);
 
   const removeTagTokenFromSearch = (tagToken: string) => {
     setSearchQuery(prev => {
@@ -1225,18 +1169,6 @@ setUndoStack(stack => [
     }
 
     return parts;
-  };
-
-  // Search is always live. Momentum view is a persistent lens and can coexist with search.
-  const applyView = (all: Task[], search: SearchViewState | null, momentumActive: boolean) => {
-    let entries = all.map((task, index) => ({ task, index }));
-    if (momentumActive) {
-      entries = entries.filter(({ task }) => task.momentum === true);
-    }
-    if (search) {
-      entries = entries.filter(({ task }) => filterTasksBySearch(task, search.query));
-    }
-    return entries;
   };
 
   const visibleTaskEntries = applyView(tasks, searchViewState, isMomentumViewActive);
