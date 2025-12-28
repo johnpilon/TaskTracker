@@ -7,6 +7,12 @@ import usePersistentTasks from '../hooks/usePersistentTasks';
 import { parseTaskMeta } from '../lib/parseTaskMeta';
 import { removeTagFromTasks } from '../lib/taskTags';
 import { applyUndo, getUndoPendingFocus, pushUndo } from '../lib/undo';
+import {
+  nextIndentFromTab,
+  nextIndexFromListArrow,
+  nextIndexFromRowArrow,
+  shouldIgnoreTab,
+} from '../lib/keyboard';
 import { cn } from '../lib/utils';
 
 /* =======================
@@ -630,14 +636,12 @@ useEffect(() => {
             ? -1
             : tasks.findIndex(t => t.id === activeTaskId);
 
-        // When the capture row is active, ArrowUp should keep you there.
-        if (currentIndex === -1 && e.key === 'ArrowUp') return;
-
-        const safeIndex = currentIndex >= 0 ? currentIndex : -1;
-        const nextIndex =
-          e.key === 'ArrowDown'
-            ? Math.min(tasks.length - 1, safeIndex + 1)
-            : Math.max(0, safeIndex - 1);
+        const nextIndex = nextIndexFromListArrow({
+          key: e.key as 'ArrowUp' | 'ArrowDown',
+          currentIndex,
+          tasksLength: tasks.length,
+        });
+        if (nextIndex === null) return;
 
         const nextTask = tasks[nextIndex];
         if (nextTask) {
@@ -1100,7 +1104,7 @@ useEffect(() => {
 
     if (e.key === 'Tab') {
       // Do not indent while actively typing a tag
-      if (normalizedQuery.length > 0) {
+      if (shouldIgnoreTab(normalizedQuery.length)) {
         e.preventDefault();
         return;
       }
@@ -1123,10 +1127,11 @@ useEffect(() => {
           t.id === task.id
             ? {
                 ...t,
-                indent: Math.max(
-                  0,
-                  Math.min(MAX_INDENT, t.indent + (e.shiftKey ? -1 : 1))
-                ),
+                indent: nextIndentFromTab({
+                  currentIndent: t.indent,
+                  shiftKey: e.shiftKey,
+                  maxIndent: MAX_INDENT,
+                }),
               }
             : t
         )
@@ -1156,10 +1161,11 @@ useEffect(() => {
 
       if (tasks.length === 0) return;
 
-      const nextIndex =
-        e.key === 'ArrowDown'
-          ? Math.min(tasks.length - 1, index + 1)
-          : Math.max(0, index - 1);
+      const nextIndex = nextIndexFromRowArrow({
+        key: e.key as 'ArrowUp' | 'ArrowDown',
+        index,
+        tasksLength: tasks.length,
+      });
 
       const nextTask = tasks[nextIndex];
       if (!nextTask) return;
@@ -1171,7 +1177,7 @@ useEffect(() => {
 
     // Tab / Shift+Tab indents/outdents the selected row anywhere within it.
     if (e.key === 'Tab') {
-      if (normalizedQuery.length > 0) {
+      if (shouldIgnoreTab(normalizedQuery.length)) {
         e.preventDefault();
         return;
       }
@@ -1198,10 +1204,11 @@ useEffect(() => {
           t.id === task.id
             ? {
                 ...t,
-                indent: Math.max(
-                  0,
-                  Math.min(MAX_INDENT, t.indent + (e.shiftKey ? -1 : 1))
-                ),
+                indent: nextIndentFromTab({
+                  currentIndent: t.indent,
+                  shiftKey: e.shiftKey,
+                  maxIndent: MAX_INDENT,
+                }),
               }
             : t
         )
