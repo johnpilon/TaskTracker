@@ -5,6 +5,7 @@ import type React from 'react';
 import TaskRow from '../components/TaskRow';
 import usePersistentTasks from '../hooks/usePersistentTasks';
 import { parseTaskMeta } from '../lib/parseTaskMeta';
+import { removeTagFromTasks } from '../lib/taskTags';
 import { applyUndo, getUndoPendingFocus, pushUndo } from '../lib/undo';
 import { cn } from '../lib/utils';
 
@@ -842,8 +843,6 @@ useEffect(() => {
   };
 
   const removeTagFromTask = (task: Task, tag: string) => {
-    const needle = tag.toLowerCase();
-  
     // 🔒 SNAPSHOT THE TASK BEFORE MUTATION
     const taskSnapshot: Task = structuredClone(task);
 
@@ -853,21 +852,7 @@ useEffect(() => {
       { type: 'edit', task: taskSnapshot },
     ]);
     
-    setAllTasks(prev =>
-      prev.map(t => {
-        if (t.id !== task.id) return t;
-    
-        const nextTags = (t.tags ?? []).filter(
-          x => x.toLowerCase() !== needle
-        );
-    
-        return {
-          ...t,
-          tags: nextTags,
-          meta: { ...(t.meta ?? {}), tags: nextTags },
-        };
-      })
-    );
+    setAllTasks(prev => removeTagFromTasks(prev, task.id, tag));
     
   
   };
