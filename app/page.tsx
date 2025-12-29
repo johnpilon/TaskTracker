@@ -991,7 +991,7 @@ const handleTagSearchClick = (rawTag: string) => {
             'block rounded-full h-2 w-2',
             isMomentumView
               ? 'bg-primary/70'
-              : 'bg-muted-foreground/40'
+              : 'border border-primary/30'
           )}
         />
 
