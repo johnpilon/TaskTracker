@@ -66,10 +66,16 @@ A task is a plain object persisted to localStorage:
 
 - **id**: string (must be unique; used as React key)
 - **text**: string (can be multiline)
-- **createdAt**: ISO timestamp string
+- **createdAt**: number (unix timestamp ms)
+- **order**: number (stable manual ordering key)
 - **completed**: boolean
+- **completedAt** (optional): number (unix timestamp ms)
+- **archived**: boolean
+- **archivedAt** (optional): ISO timestamp string
 - **indent**: number (0..MAX_INDENT)
-- **tags**: string[] (derived from `#tags` found in text; stored normalized)
+- **tags**: string[] (lowercased, de-duped; canonical tag state)
+- **intent** (optional): `"now" | "soon" | "later"`
+- **momentum** (optional): boolean
 - **meta** (optional): currently `{ tags: string[] }` for backward compatibility
 
 ### Persistence key
@@ -104,17 +110,20 @@ A task is a plain object persisted to localStorage:
 ## 4. State Ownership
 
 ### Where state lives
-All cross-row and document-level state is owned by the page component:
-- **tasks** (source of truth)
-- editing state (**editingId**, **editingText**, **caretPos**)
+All cross-row and document-level state was owned by the page component and was coordinated via extracted controllers:
+- **tasks** (source of truth; persisted via `usePersistentTasks()`)
+- editing state (**editingId**, **editingText**)
+- caret + focus state (**caretPos**, pending focus restoration) (managed by `useFocusController()`)
 - selection state (**activeTaskId**)
-- drag state (**dragIndex**, refs for drag)
-- undo state (**undoAction**)
+- view state (**searchQuery**, **recentViews**, **isMomentumViewActive**; derived visibility via `lib/views.ts`)
+- drag state (**dragIndex**; drag refs + pointer handlers managed by `useDragController()`)
+- undo state (**undoStack**; applied via `lib/undo.ts`, triggered by `useKeyboardController()`)
 
 Theme state is owned by the layout layer:
 - **System preference**: `prefers-color-scheme`
 - **Optional override**: localStorage `theme` = `"light" | "dark"` (absence implies "system")
-- The **dark class** is applied to `<html>`
+- The **dark class** was applied to `<html>` (pre-hydration script)
+- The active theme was also applied via `<html data-theme="...">` (post-hydration via `ThemeManager`)
 
 UI state is partially persisted:
 - localStorage key: `task_ui_state`
@@ -128,8 +137,8 @@ UI state is partially persisted:
 - **TaskRow is a controlled component**: it renders state and emits intent but does not own cross-row state or persistence.
 
 ### Undo ownership
-- Undo is a single “last action” slot (`undoAction`), not a stack.
-- Undo is triggered via a window keydown handler (capture phase) and applies a deterministic inverse operation.
+- Undo was a stack (`undoStack`) of `UndoAction` snapshots (LIFO).
+- Undo was triggered via a window keydown handler (capture phase) in `useKeyboardController()` and applied a deterministic inverse operation.
 - Split/merge undo uses **IDs**, not indexes, to avoid corruption when the list changes.
 
 ---
@@ -137,7 +146,7 @@ UI state is partially persisted:
 ## 5. Component Responsibilities
 
 ### page.tsx
-- Owns all document-level state, persistence, and orchestration logic.
+- Owned document-level state and wired orchestration via extracted controller modules.
 - Renders the input + task list UI.
 - Implements:
   - task creation and deletion
@@ -174,6 +183,14 @@ Implemented:
   - validates + dedupes loaded tasks
   - writes `{ version: 1, tasks }` to `tasks_backup` then `tasks`
 
+### lib controllers (implemented)
+- `lib/editingController.ts`: created/committed edits and split/merged tasks while maintaining undo snapshots
+- `lib/views.ts`: tokenized search, derived tag views, and computed derived visibility (pure)
+- `lib/uiState.ts`: persisted/restored UI state (`task_ui_state`) for active/editing row and caret
+- `lib/dragController.ts`: handled pointer drag reorder + horizontal indent (with pointer capture + user-select suppression)
+- `lib/focusController.ts`: handled caret math and post-mutation focus restoration (including caret-from-point)
+- `lib/keyboardController.ts`: orchestrated global keydown behavior (arrow navigation + Ctrl/Cmd+Z undo + search escape)
+
 Potential future hooks:
 - `useUndo()`
 - `useRovingFocus()`
@@ -183,14 +200,14 @@ Potential future hooks:
 
 ## Current State – Post TaskRow Extraction
 - `TaskRow` has been extracted as a controlled component.
-- No user-visible behavior changed.
-- `page.tsx` still owns:
-  - the tasks array and ordering
-  - undo logic
-  - persistence (localStorage)
-  - cross-row operations (split, merge, reorder, indent)
+- Search/filter/view derivation has been extracted to `lib/views.ts` (pure functions).
+- UI state persistence/restoration has been extracted to `lib/uiState.ts`.
+- Drag reorder/indent pointer logic has been extracted to `lib/dragController.ts`.
+- Focus/caret math and focus restoration has been extracted to `lib/focusController.ts`.
+- Global keyboard orchestration (arrow nav + undo + search escape) has been extracted to `lib/keyboardController.ts`.
+- `page.tsx` continues to own top-level state and composes these controllers.
 - Row-level rendering and interaction logic now lives in `TaskRow`.
-- The build compiles and UX is unchanged.
+- The build compiles and UX has remained unchanged through the extractions.
 
 ---
 
@@ -198,10 +215,11 @@ Potential future hooks:
 
 ### Current
 - **System-first** with optional override:
-  - default uses `prefers-color-scheme`
-  - optional override in localStorage key `theme` with values `"light" | "dark"`
-  - override wins over system preference
-- Applies the **`dark`** class to the `<html>` element.
+  - default used `prefers-color-scheme`
+  - optional override was stored in localStorage key `theme` with values `"system" | "light" | "dark" | "dark-blue" | "black"`
+  - override won over system preference
+- Applied the **`dark`** class to the `<html>` element via an inline pre-hydration script.
+- Applied the selected theme via `<html data-theme="...">` (used by CSS variables in `app/globals.css`).
 - **No theme logic in task logic** (`page.tsx` remains theme-agnostic).
 - UI is mostly token-based (`bg-background`, `text-foreground`, `border-border`, `ring-ring`).
 
@@ -224,7 +242,7 @@ Potential future hooks:
 - **LocalStorage corruption**: duplicate IDs can break reconciliation; may require dedupe-on-load.
 - **Multiple input modalities**: mouse + keyboard + pointer drag require strict precedence rules.
 - **Dev cache issues**: deleting `.next` may be required after crashes.
-- **Search vs tags mismatch**: the UI advertises “Search tasks or #tags”, but the current filter only checks `task.text` (tags are stored separately).
+- **Search semantics**: search supported text tokens and `#tag` tokens (AND semantics) against `task.text` and `task.tags`; tag-only search was treated as a view.
 - **Theme token purity**: most UI uses token classes, but `highlightMatches` currently includes a Tailwind `dark:` variant for `<mark>` styling.
 
 ### Suspected wrong / risky
@@ -247,3 +265,27 @@ Potential future hooks:
 - Complex prioritization (due dates, reminders).
 - Full Kanban/project management features.
 - Plugin architecture or editor frameworks unless unavoidable.
+
+---
+
+## 9. Major Dependencies (Current)
+
+### Core runtime
+- `next` + App Router (`app/`): provided routing, build, and SSR/CSR boundaries
+- `react` / `react-dom`: provided the UI runtime
+- `typescript`: provided type checking
+
+### Styling + UI primitives
+- `tailwindcss` + `tailwindcss-animate`: provided styling and motion utilities
+- shadcn/ui (`components/ui/*`) + `@radix-ui/*`: provided UI primitives used throughout the app
+- `lucide-react`: provided the icon set (used in UI components)
+- `class-variance-authority`, `clsx`, `tailwind-merge`: provided class composition utilities (via `cn` in `lib/utils.ts`)
+
+### Notifications
+- `sonner`: provided toasts (wired via `components/ui/sonner.tsx`)
+- `next-themes`: was used by the `sonner` Toaster theme adapter (`components/ui/sonner.tsx`)
+
+### Installed but not currently used in core task flow
+- `@dnd-kit/*`: was present in dependencies; drag/reorder was implemented via custom pointer logic
+- `@supabase/supabase-js`: was present in dependencies; no Supabase integration was implemented in the app code
+- `zod`: was present in dependencies; no runtime schema validation was used in the app code
