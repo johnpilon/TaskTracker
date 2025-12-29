@@ -159,18 +159,26 @@ export default function Home() {
     tasks,
     lists,
     activeListId: effectiveActiveListId,
-    searchScope,
     activeTaskId,
     editingId,
     caretPos,
     setActiveListId,
-    setSearchScope,
     setActiveTaskId,
     setEditingId,
     setEditingText,
     setCaretPos,
     resetCaretInitialized,
   });
+
+  const prevEffectiveListIdRef = useRef<string>('');
+  useEffect(() => {
+    const prev = prevEffectiveListIdRef.current;
+    if (prev && prev !== effectiveActiveListId) {
+      setSearchQuery('');
+      setSearchScope('list');
+    }
+    prevEffectiveListIdRef.current = effectiveActiveListId;
+  }, [effectiveActiveListId]);
 
   useEffect(() => {
     if (lists.length === 0) return;
@@ -912,6 +920,8 @@ const handleTagSearchClick = (rawTag: string) => {
                 }}
                 onClick={() => {
                   commitActiveEditIfAny();
+                  setSearchQuery('');
+                  setSearchScope('list');
                   setActiveListId(l.id);
                 }}
               >
@@ -1272,7 +1282,7 @@ const handleTagSearchClick = (rawTag: string) => {
             onMouseDown={e => e.preventDefault()}
             onClick={() => setSearchScope('list')}
           >
-            Searching all lists. Search this list only?
+            Showing results from all lists · Search only this list
           </button>
         )}
 

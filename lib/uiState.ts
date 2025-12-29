@@ -7,7 +7,6 @@ type StoredUIState = {
   editingTaskId?: unknown;
   caret?: unknown;
   activeListId?: unknown;
-  searchScope?: unknown;
 };
 
 type RestoreContextTask = { id: string; text: string };
@@ -17,12 +16,10 @@ export function useUIStatePersistence(opts: {
   tasks: RestoreContextTask[];
   lists: RestoreContextList[];
   activeListId: string;
-  searchScope: 'list' | 'all';
   activeTaskId: string;
   editingId: string | null;
   caretPos: number | null;
   setActiveListId: (id: string) => void;
-  setSearchScope: (scope: 'list' | 'all') => void;
   setActiveTaskId: (id: string) => void;
   setEditingId: (id: string | null) => void;
   setEditingText: (text: string) => void;
@@ -33,12 +30,10 @@ export function useUIStatePersistence(opts: {
     tasks,
     lists,
     activeListId,
-    searchScope,
     activeTaskId,
     editingId,
     caretPos,
     setActiveListId,
-    setSearchScope,
     setActiveTaskId,
     setEditingId,
     setEditingText,
@@ -95,14 +90,9 @@ export function useUIStatePersistence(opts: {
       if (!parsed || typeof parsed !== 'object') return;
 
       const storedActiveListId = parsed.activeListId;
-      const storedSearchScope = parsed.searchScope;
       const storedActive = parsed.activeTaskId;
       const storedEditing = parsed.editingTaskId;
       const storedCaret = parsed.caret;
-
-      if (storedSearchScope === 'all' || storedSearchScope === 'list') {
-        setSearchScope(storedSearchScope);
-      }
 
       const hasActiveList =
         typeof storedActiveListId === 'string' &&
@@ -145,7 +135,6 @@ export function useUIStatePersistence(opts: {
         UI_STATE_KEY,
         JSON.stringify({
           activeListId,
-          searchScope,
           activeTaskId,
           editingTaskId: editingId,
           caret: caretPos,
@@ -154,7 +143,7 @@ export function useUIStatePersistence(opts: {
     } catch {
       // Ignore persistence errors for UI state
     }
-  }, [activeListId, searchScope, activeTaskId, editingId, caretPos]);
+  }, [activeListId, activeTaskId, editingId, caretPos]);
 
   return { isRestoringUI };
 }
