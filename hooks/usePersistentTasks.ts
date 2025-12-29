@@ -254,7 +254,8 @@ const loadTasks = (): Task[] => {
 export default function usePersistentTasks(): [
   Task[],
   React.Dispatch<React.SetStateAction<Task[]>>,
-  List[]
+  List[],
+  (name: string) => List | null
 ] {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [lists, setLists] = useState<List[]>([]);
@@ -337,5 +338,19 @@ export default function usePersistentTasks(): [
     });
   };
 
-  return [tasks, setTasksSorted, lists];
+  const createList = (name: string): List | null => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return null;
+
+    const now = Date.now();
+    const created: List = { id: createId(), name: trimmed, createdAt: now };
+    setLists(prev => {
+      const next = [...prev, created];
+      persistLists(next);
+      return next;
+    });
+    return created;
+  };
+
+  return [tasks, setTasksSorted, lists, createList];
 }

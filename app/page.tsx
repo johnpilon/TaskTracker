@@ -89,8 +89,9 @@ const NEW_TASK_ROW_ID = '__new__';
 ======================= */
 
 export default function Home() {
-  const [allTasks, setAllTasks, lists] = usePersistentTasks();
+  const [allTasks, setAllTasks, lists, createList] = usePersistentTasks();
   const [activeListId, setActiveListId] = useState<string>('');
+  const [newListName, setNewListName] = useState('');
   const effectiveActiveListId = activeListId || lists[0]?.id || '';
   const tasks = allTasks.filter(
     t =>
@@ -106,7 +107,17 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
+  const [undoStacksByList, setUndoStacksByList] = useState<Record<string, UndoAction[]>>({});
+  const undoStack = undoStacksByList[effectiveActiveListId || '__default__'] ?? [];
+  const setUndoStack: React.Dispatch<React.SetStateAction<UndoAction[]>> = updater => {
+    const key = effectiveActiveListId || '__default__';
+    setUndoStacksByList(prev => {
+      const current = prev[key] ?? [];
+      const next = typeof updater === 'function' ? (updater as any)(current) : updater;
+      if (next === current) return prev;
+      return { ...prev, [key]: next };
+    });
+  };
   
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
@@ -842,7 +853,72 @@ const handleTagSearchClick = (rawTag: string) => {
 
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-5xl mx-auto flex gap-8">
+        <aside className="w-56 shrink-0">
+          <div className="text-[10px] tracking-wider text-muted-foreground/70">Lists</div>
+          <div className="mt-2 flex flex-col gap-1">
+            {lists.map(l => (
+              <button
+                key={l.id}
+                type="button"
+                className={cn(
+                  'w-full text-left rounded-md px-2 py-1.5 text-sm',
+                  'border border-border/50',
+                  l.id === effectiveActiveListId
+                    ? 'bg-card/40 text-foreground'
+                    : 'bg-transparent text-muted-foreground hover:bg-muted/20'
+                )}
+                onMouseDown={e => {
+                  // Do not steal focus from the main list on click; keep behavior consistent.
+                  e.preventDefault();
+                }}
+                onClick={() => {
+                  commitActiveEditIfAny();
+                  setActiveListId(l.id);
+                }}
+              >
+                {l.name}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <div className="text-[10px] tracking-wider text-muted-foreground/70">Add</div>
+            <div className="mt-2 flex gap-2">
+              <input
+                value={newListName}
+                onChange={e => setNewListName(e.target.value)}
+                placeholder="New list name"
+                className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const created = createList(newListName);
+                    if (!created) return;
+                    setNewListName('');
+                    setActiveListId(created.id);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="h-9 shrink-0 rounded-md border border-border bg-card px-3 text-sm text-foreground hover:bg-muted/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => {
+                  const created = createList(newListName);
+                  if (!created) return;
+                  setNewListName('');
+                  setActiveListId(created.id);
+                }}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <div className="flex-1 min-w-0">
+          <div className="max-w-3xl">
         {/* 🔍 Search input */}
         <div className="relative mt-4">
           {isTagView && (
@@ -1381,7 +1457,14 @@ const handleTagSearchClick = (rawTag: string) => {
               />
             );
           })}
+          {visibleTaskEntries.length === 0 && (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No tasks in this list.
+            </div>
+          )}
           </div>
+        </div>
+        </div>
         </div>
       </div>
     </div>
