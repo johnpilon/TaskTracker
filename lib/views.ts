@@ -23,6 +23,8 @@ export const deriveViewState = (raw: string): SearchViewState | null => {
 
 type TaskLikeForView = { text: string; tags?: string[] };
 
+const normalizeTag = (tag: string) => tag.toLowerCase().replace(/^#/, '');
+
 export const filterTasksBySearch = (task: TaskLikeForView, query: string): boolean => {
   const tokens = tokenizeQuery(query);
   if (tokens.length === 0) return true;
@@ -34,7 +36,7 @@ export const filterTasksBySearch = (task: TaskLikeForView, query: string): boole
   const textTokens = tokens.filter(t => !t.startsWith('#'));
 
   const textMatch = textTokens.every(
-    t => text.includes(t) || tags.some(tag => tag.toLowerCase() === t)
+    t => text.includes(t) || tags.some(tag => normalizeTag(tag) === t)
   );
   const tagMatch = tagTokens.every(t => {
     const needle = t.slice(1);
