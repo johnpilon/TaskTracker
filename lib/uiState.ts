@@ -6,15 +6,20 @@ type StoredUIState = {
   activeTaskId?: unknown;
   editingTaskId?: unknown;
   caret?: unknown;
+  activeListId?: unknown;
 };
 
 type RestoreContextTask = { id: string; text: string };
+type RestoreContextList = { id: string };
 
 export function useUIStatePersistence(opts: {
   tasks: RestoreContextTask[];
+  lists: RestoreContextList[];
+  activeListId: string;
   activeTaskId: string;
   editingId: string | null;
   caretPos: number | null;
+  setActiveListId: (id: string) => void;
   setActiveTaskId: (id: string) => void;
   setEditingId: (id: string | null) => void;
   setEditingText: (text: string) => void;
@@ -23,9 +28,12 @@ export function useUIStatePersistence(opts: {
 }) {
   const {
     tasks,
+    lists,
+    activeListId,
     activeTaskId,
     editingId,
     caretPos,
+    setActiveListId,
     setActiveTaskId,
     setEditingId,
     setEditingText,
@@ -69,7 +77,7 @@ export function useUIStatePersistence(opts: {
 
   useEffect(() => {
     if (uiRestoredRef.current) return;
-    if (tasks.length === 0) return;
+    if (tasks.length === 0 && lists.length === 0) return;
 
     uiRestoredRef.current = true;
 
@@ -81,9 +89,20 @@ export function useUIStatePersistence(opts: {
       const parsed = raw as StoredUIState;
       if (!parsed || typeof parsed !== 'object') return;
 
+      const storedActiveListId = parsed.activeListId;
       const storedActive = parsed.activeTaskId;
       const storedEditing = parsed.editingTaskId;
       const storedCaret = parsed.caret;
+
+      const hasActiveList =
+        typeof storedActiveListId === 'string' &&
+        lists.some(l => l.id === storedActiveListId);
+
+      if (hasActiveList) {
+        setActiveListId(storedActiveListId as string);
+      } else if (lists.length > 0) {
+        setActiveListId(lists[0]!.id);
+      }
 
       const hasActive =
         typeof storedActive === 'string' && tasks.some(t => t.id === storedActive);
@@ -115,6 +134,7 @@ export function useUIStatePersistence(opts: {
       localStorage.setItem(
         UI_STATE_KEY,
         JSON.stringify({
+          activeListId,
           activeTaskId,
           editingTaskId: editingId,
           caret: caretPos,
@@ -123,7 +143,7 @@ export function useUIStatePersistence(opts: {
     } catch {
       // Ignore persistence errors for UI state
     }
-  }, [activeTaskId, editingId, caretPos]);
+  }, [activeListId, activeTaskId, editingId, caretPos]);
 
   return { isRestoringUI };
 }

@@ -89,8 +89,14 @@ const NEW_TASK_ROW_ID = '__new__';
 ======================= */
 
 export default function Home() {
-  const [allTasks, setAllTasks] = usePersistentTasks();
-  const tasks = allTasks.filter(t => !t.archived);
+  const [allTasks, setAllTasks, lists] = usePersistentTasks();
+  const [activeListId, setActiveListId] = useState<string>('');
+  const effectiveActiveListId = activeListId || lists[0]?.id || '';
+  const tasks = allTasks.filter(
+    t =>
+      !t.archived &&
+      (effectiveActiveListId ? t.listId === effectiveActiveListId : true)
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [recentViews, setRecentViews] = useState<string[]>([]);
   const [isMomentumViewActive, setIsMomentumViewActive] = useState(false);
@@ -122,15 +128,24 @@ export default function Home() {
     });
   const { isRestoringUI } = useUIStatePersistence({
     tasks,
+    lists,
+    activeListId: effectiveActiveListId,
     activeTaskId,
     editingId,
     caretPos,
+    setActiveListId,
     setActiveTaskId,
     setEditingId,
     setEditingText,
     setCaretPos,
     resetCaretInitialized,
   });
+
+  useEffect(() => {
+    if (lists.length === 0) return;
+    const valid = lists.some(l => l.id === activeListId);
+    if (!valid) setActiveListId(lists[0]!.id);
+  }, [lists, activeListId]);
   const { handlePointerDown } = useDragController<Task, UndoAction>({
     tasks,
     setAllTasks,
