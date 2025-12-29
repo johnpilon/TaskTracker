@@ -5,93 +5,184 @@
 @tailwind utilities;
 
 /* --------------------------------------------------
-   Base theme tokens (shadcn-compatible)
+   Theme presets (shadcn-compatible)
+   Select via data-theme
    -------------------------------------------------- */
 
 @layer base {
-  :root {
-    /* Slate-blue theme tuned for sustained use and low eye strain.
-       Single accent, widened luminance steps, surface-based hierarchy. */
-    /* Core palette */
-    --background: 210 22% 96%;
-    --foreground: 215 28% 17%;
+  /* ============================
+     LIGHT THEME
+     ============================ */
 
-    --card: 0 0% 100%;
-    --card-foreground: 215 28% 17%;
+     :root[data-theme="light"] {
+      /* Calm warm-gray light theme
+         Optimized for long reading and writing */
+    
+      /* Canvas */
+      --background: 210 16% 93%;
+      --foreground: 215 22% 18%;
+    
+      /* Surfaces */
+      --card: 210 16% 97%;
+      --card-foreground: 215 22% 18%;
+    
+      --popover: 210 16% 97%;
+      --popover-foreground: 215 22% 18%;
+    
+      /* Primary actions (quiet, not loud) */
+      --primary: 215 20% 32%;
+      --primary-foreground: 210 16% 97%;
+    
+      /* Secondary surfaces */
+      --secondary: 210 14% 89%;
+      --secondary-foreground: 215 18% 32%;
+    
+      /* Muted text + UI chrome */
+      --muted: 210 14% 89%;
+      --muted-foreground: 215 10% 45%;
+    
+      /* Selection + hover */
+      --accent: 215 22% 88%;
+      --accent-foreground: 215 22% 18%;
+    
+      /* Errors */
+      --destructive: 0 65% 52%;
+      --destructive-foreground: 0 0% 98%;
+    
+      /* Structure */
+      --border: 210 12% 84%;
+      --input: 210 12% 84%;
+      --ring: 215 28% 55%;
+    
+      --radius: 0.5rem;
+    }
+    
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 215 28% 17%;
+  /* ============================
+     DARK THEME (neutral charcoal)
+     ============================ */
 
-    --primary: 229 91% 64%;
+     :root[data-theme="dark"] {
+      --background: 220 10% 11%;
+      --foreground: 220 10% 92%;
+    
+      --card: 220 10% 14%;
+      --card-foreground: 220 10% 92%;
+    
+      --popover: 220 10% 14%;
+      --popover-foreground: 220 10% 92%;
+    
+      --primary: 220 8% 80%;
+      --primary-foreground: 220 10% 12%;
+    
+      --secondary: 220 10% 18%;
+      --secondary-foreground: 220 10% 92%;
+    
+      --muted: 220 10% 18%;
+      --muted-foreground: 220 6% 60%;
+    
+      --accent: 220 10% 22%;
+      --accent-foreground: 220 10% 92%;
+    
+      --destructive: 0 60% 35%;
+      --destructive-foreground: 0 0% 98%;
+    
+      --border: 220 8% 24%;
+      --input: 220 8% 24%;
+      --ring: 220 10% 70%;
+    
+      --radius: 0.5rem;
+    }
+    
+
+  /* ============================
+     DARK BLUE (NAVY) THEME
+     ============================ */
+
+     :root[data-theme="dark-blue"] {
+      --background: 212 35% 9%;
+      --foreground: 212 25% 96%;
+    
+      --card: 212 32% 13%;
+      --card-foreground: 212 25% 96%;
+    
+      --popover: 212 32% 13%;
+      --popover-foreground: 212 25% 96%;
+    
+      --primary: 212 100% 60%;
+      --primary-foreground: 212 30% 96%;
+    
+      --secondary: 212 30% 18%;
+      --secondary-foreground: 212 25% 96%;
+    
+      --muted: 212 30% 18%;
+      --muted-foreground: 212 20% 70%;
+    
+      --accent: 212 40% 22%;
+      --accent-foreground: 212 25% 96%;
+    
+      --destructive: 0 60% 35%;
+      --destructive-foreground: 0 0% 98%;
+    
+      --border: 212 28% 26%;
+      --input: 212 28% 26%;
+      --ring: 212 100% 60%;
+    
+      --radius: 0.5rem;
+    }
+    
+
+  /* ============================
+     BLACK THEME
+     ============================ */
+
+  :root[data-theme="black"] {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 210 100% 55%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 216 30% 92%;
-    --secondary-foreground: 215 14% 34%;
+    --secondary: 0 0% 8%;
+    --secondary-foreground: 0 0% 96%;
 
-    --muted: 216 30% 92%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 0 0% 8%;
+    --muted-foreground: 0 0% 65%;
 
-    --accent: 229 93% 89%;
-    --accent-foreground: 215 28% 17%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-
-    --border: 219 32% 91%;
-    --input: 219 32% 91%;
-    --ring: 229 92% 70%;
-
-    --radius: 0.5rem;
-  }
-
-  .dark {
-    /* Softer charcoal for long reading/writing */
-    --background: 220 18% 12%;
-    --foreground: 220 13% 91%;
-
-    --card: 220 18% 14%;
-    --card-foreground: 220 13% 91%;
-
-    --popover: 220 18% 14%;
-    --popover-foreground: 220 13% 91%;
-
-    --primary: 229 91% 64%;
-    --primary-foreground: 220 13% 91%;
-
-    --secondary: 220 16% 16%;
-    --secondary-foreground: 220 13% 91%;
-
-    --muted: 220 16% 16%;
-    --muted-foreground: 218 13% 65%;
-
-    --accent: 229 22% 22%;
-    --accent-foreground: 220 13% 91%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 96%;
 
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 220 14% 22%;
-    --input: 220 14% 22%;
-    --ring: 229 92% 70%;
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 210 100% 55%;
+
+    --radius: 0.5rem;
   }
 }
 
 /* --------------------------------------------------
-   App-level semantic tokens (THIS IS THE IMPORTANT PART)
+   App-level semantic tokens
+   (theme-agnostic, DO NOT DUPLICATE)
    -------------------------------------------------- */
 
 @layer base {
   :root {
-    /* Canvas + surfaces */
     --app-bg: hsl(var(--background));
     --app-surface: hsl(var(--card));
     --app-surface-hover: hsl(var(--accent));
 
-    /* Text */
     --app-text: hsl(var(--foreground));
     --app-text-muted: hsl(var(--muted-foreground));
 
-    /* Structure + focus */
     --app-border: hsl(var(--border));
     --app-ring: hsl(var(--ring));
   }

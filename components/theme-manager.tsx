@@ -2,56 +2,88 @@
 
 import { useEffect } from 'react';
 
-type ThemeOverride = 'light' | 'dark';
+/* =======================
+   Types
+======================= */
 
-const STORAGE_KEY = 'theme';
+type Theme =
+  | 'system'
+  | 'light'
+  | 'dark'
+  | 'dark-blue'
+  | 'black';
+
+/* =======================
+   Constants
+======================= */
+
+const THEME_KEY = 'theme';
 const MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const THEME_CHANGE_EVENT = 'themechange';
 
-function isThemeOverride(value: unknown): value is ThemeOverride {
-  return value === 'light' || value === 'dark';
+/* =======================
+   Helpers
+======================= */
+
+function isTheme(value: unknown): value is Theme {
+  return (
+    value === 'system' ||
+    value === 'light' ||
+    value === 'dark' ||
+    value === 'dark-blue' ||
+    value === 'black'
+  );
 }
 
-function readOverride(): ThemeOverride | null {
+function readTheme(): Theme {
   try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    return isThemeOverride(value) ? value : null;
+    const v = window.localStorage.getItem(THEME_KEY);
+    return isTheme(v) ? v : 'system';
   } catch {
-    return null;
+    return 'system';
   }
 }
 
-function getSystemTheme(): ThemeOverride {
+function systemResolvesTo(): Exclude<Theme, 'system'> {
   return window.matchMedia(MEDIA_QUERY).matches ? 'dark' : 'light';
 }
 
-function applyTheme(theme: ThemeOverride) {
-  document.documentElement.classList.toggle('dark', theme === 'dark');
+function applyTheme(theme: Exclude<Theme, 'system'>) {
+  document.documentElement.dataset.theme = theme;
 }
+
+/* =======================
+   Component
+======================= */
 
 export function ThemeManager() {
   useEffect(() => {
     const mql = window.matchMedia(MEDIA_QUERY);
     const legacyMql = mql as MediaQueryList & {
       addListener?: (listener: (ev: MediaQueryListEvent) => void) => void;
-      removeListener?: (listener: (ev: MediaQueryListEvent) => void) => void;
+      removeListener?: (listener: (listener: MediaQueryListEvent) => void) => void;
     };
 
     const applyPreferred = () => {
-      const override = readOverride();
-      applyTheme(override ?? getSystemTheme());
+      const stored = readTheme();
+      const resolved =
+        stored === 'system' ? systemResolvesTo() : stored;
+
+      applyTheme(resolved);
     };
 
-    // Initial sync after hydration
+    /* ---------- Initial sync after hydration ---------- */
     applyPreferred();
 
     const onSystemChange = () => {
-      // Only respond to system changes if there is no explicit override.
-      if (!readOverride()) applyTheme(getSystemTheme());
+      // Only re-resolve if user chose "system"
+      if (readTheme() === 'system') {
+        applyTheme(systemResolvesTo());
+      }
     };
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY) return;
+      if (e.key !== THEME_KEY) return;
       applyPreferred();
     };
 
@@ -82,5 +114,3 @@ export function ThemeManager() {
 
   return null;
 }
-
-
