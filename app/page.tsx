@@ -987,12 +987,7 @@ const handleTagSearchClick = (rawTag: string) => {
         {/* Momentum state dot */}
                 <span
           aria-hidden
-          className={cn(
-            'block rounded-full h-2 w-2',
-            isMomentumView
-              ? 'bg-primary/70'
-              : 'bg-muted-foreground/40'
-          )}
+          className="block rounded-full h-2 w-2 bg-primary/70"
         />
 
 
