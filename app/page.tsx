@@ -142,8 +142,10 @@ export default function Home() {
   };
   
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragTargetIndex, setDragTargetIndex] = useState<number | null>(null);
   const resetDragState = () => {
     setDragIndex(prev => (prev === null ? prev : null));
+    setDragTargetIndex(null);
     try {
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -267,6 +269,7 @@ export default function Home() {
     setAllTasks: setAllTasks,
     setUndoStack,
     setDragIndex,
+    setDragTargetIndex,
     rowRefsByIdRef: dragRowRefsByIdRef,
     activeListId: effectiveActiveListId,
     INDENT_WIDTH: DRAG_INDENT_WIDTH,
@@ -1556,6 +1559,7 @@ const handleTagSearchClick = (rawTag: string) => {
             containerClassName="mt-2"
             isActive={activeTaskId === NEW_TASK_ROW_ID}
             dragIndex={dragIndex}
+            dragTargetIndex={dragTargetIndex}
             effectiveIndent={0}
             indentWidth={INDENT_WIDTH}
             activeTags={undefined}
@@ -1692,6 +1696,7 @@ const handleTagSearchClick = (rawTag: string) => {
                   index={index}
                   isActive={isActive}
                   dragIndex={dragIndex}
+                  dragTargetIndex={dragTargetIndex}
                   effectiveIndent={effectiveIndent}
                   indentWidth={INDENT_WIDTH}
                   activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}

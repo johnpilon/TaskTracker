@@ -12,6 +12,7 @@ export function useDragController<
   setAllTasks: Dispatch<SetStateAction<TTask[]>>;
   setUndoStack: Dispatch<SetStateAction<TUndoAction[]>>;
   setDragIndex: (index: number | null) => void;
+  setDragTargetIndex: (index: number | null) => void;
   rowRefsByIdRef: { current: Map<string, HTMLDivElement> };
   activeListId: string;
   INDENT_WIDTH: number;
@@ -24,6 +25,7 @@ export function useDragController<
     setAllTasks,
     setUndoStack,
     setDragIndex,
+    setDragTargetIndex,
     rowRefsByIdRef,
     activeListId,
     INDENT_WIDTH,
@@ -55,6 +57,7 @@ export function useDragController<
     document.body.style.userSelect = 'none';
 
     setDragIndex(index);
+    setDragTargetIndex(index); // Initially, target is same as source
     dragIndexRef.current = index;
     taskOrderRef.current = [...tasks]; // Snapshot task order at drag start
 
@@ -158,8 +161,9 @@ setUndoStack(stack => [
           orderCopy.splice(to, 0, moved);
           taskOrderRef.current = orderCopy;
 
-          // Update drag index ref immediately (NO setState call during move to avoid render loops)
+          // Update drag index ref and target index
           dragIndexRef.current = to;
+          setDragTargetIndex(to); // Update visual indicator
 
           // Sync state: merge reordered drag slice back into allTasks
           setAllTasks(prevAll => {
@@ -221,6 +225,7 @@ setUndoStack(stack => [
       document.body.style.userSelect = '';
       dragIndexRef.current = null;
       setDragIndex(null);
+      setDragTargetIndex(null);
       dragStartXRef.current = null;
       baseIndentRef.current = null;
       moveInProgressRef.current = false; // Reset move lock

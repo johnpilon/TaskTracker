@@ -10,6 +10,7 @@ interface TaskRowProps {
   index: number;
   isActive: boolean;
   dragIndex: number | null;
+  dragTargetIndex?: number | null;
   effectiveIndent: number;
   indentWidth: number;
   isEntryRow?: boolean;
@@ -50,6 +51,7 @@ export default function TaskRow({
   index,
   isActive,
   dragIndex,
+  dragTargetIndex,
   effectiveIndent,
   indentWidth,
   isEntryRow,
@@ -126,22 +128,37 @@ export default function TaskRow({
         containerClassName
       )}
     >
-      {/* Selection / focus ring */}
-      {(isActive || isEditing) && !isEntryRow && (
+      {/* Selection / focus ring - hidden during drag */}
+      {(isActive || isEditing) && !isEntryRow && dragIndex === null && (
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 rounded-sm ring-1 ring-primary/60"
         />
       )}
 
-      {/* Drag overlay */}
-      <div
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute inset-0',
-          dragIndex === index && 'shadow-[0_0_0_2px_hsl(var(--ring))]'
-        )}
-      />
+      {/* Drag source indicator - dim the original position */}
+      {dragIndex !== null && dragIndex === index && dragTargetIndex !== index && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-muted/30 rounded-sm"
+        />
+      )}
+
+      {/* Drag target indicator - highlight where item currently is */}
+      {dragTargetIndex !== null && dragTargetIndex === index && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 shadow-[0_0_0_2px_hsl(var(--primary))] rounded-sm bg-primary/5"
+        />
+      )}
+
+      {/* Drop indicator line - shows above the target row */}
+      {dragTargetIndex !== null && dragTargetIndex === index && dragIndex !== null && dragIndex !== index && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-[2px] left-2 right-2 h-1 bg-primary rounded-full"
+        />
+      )}
 
       {/* Indent spacing */}
       <div style={{ width: effectiveIndent * indentWidth }} className="flex self-start mt-[2px]" />
