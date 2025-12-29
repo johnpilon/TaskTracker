@@ -106,12 +106,17 @@ export default function Home() {
       });
     });
   };
-  const tasks = allTasks.filter(
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchViewState = deriveViewState(searchQuery);
+  const [searchScope, setSearchScope] = useState<'list' | 'all'>('list');
+  const listScopedTasks = allTasks.filter(
     t =>
       !t.archived &&
       (effectiveActiveListId ? t.listId === effectiveActiveListId : true)
   );
-  const [searchQuery, setSearchQuery] = useState('');
+  const allListsTasks = allTasks.filter(t => !t.archived);
+  const tasks =
+    searchScope === 'all' && searchViewState !== null ? allListsTasks : listScopedTasks;
   const [recentViews, setRecentViews] = useState<string[]>([]);
   const [isMomentumViewActive, setIsMomentumViewActive] = useState(false);
 
@@ -154,10 +159,12 @@ export default function Home() {
     tasks,
     lists,
     activeListId: effectiveActiveListId,
+    searchScope,
     activeTaskId,
     editingId,
     caretPos,
     setActiveListId,
+    setSearchScope,
     setActiveTaskId,
     setEditingId,
     setEditingText,
@@ -787,7 +794,6 @@ const handleTagSearchClick = (rawTag: string) => {
   ======================= */
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const searchViewState = deriveViewState(searchQuery);
   const isMomentumView = isMomentumViewActive;
   const activeTagTokens = deriveActiveTagTokens(searchViewState);
   const isTagView = isTagViewFn(searchViewState);
@@ -863,6 +869,17 @@ const handleTagSearchClick = (rawTag: string) => {
   const momentumCount = isMomentumView
     ? visibleTasks.length
     : tasks.filter(t => !t.completed && t.momentum === true).length;
+  const canExpandToAllLists =
+    searchViewState !== null &&
+    searchScope === 'list' &&
+    applyView(listScopedTasks, searchViewState, isMomentumViewActive).length === 0 &&
+    applyView(allListsTasks, searchViewState, isMomentumViewActive).length > 0;
+  const isGlobalSearchActive = searchViewState !== null && searchScope === 'all';
+  const listNameById = (() => {
+    const out: Record<string, string> = {};
+    for (const l of lists) out[l.id] = l.name;
+    return out;
+  })();
 
   return (
     <div className="min-h-screen bg-background text-foreground p-8">
@@ -1230,6 +1247,26 @@ const handleTagSearchClick = (rawTag: string) => {
             Showing {visibleTasks.length} of {tasks.length} tasks
           </div>
         )}
+        {canExpandToAllLists && (
+          <button
+            type="button"
+            className="mt-1 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => setSearchScope('all')}
+          >
+            No results in this list. Search all lists?
+          </button>
+        )}
+        {isGlobalSearchActive && (
+          <button
+            type="button"
+            className="mt-1 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => setSearchScope('list')}
+          >
+            Searching all lists. Search this list only?
+          </button>
+        )}
 
         {/* Task list container provides visual structure without adding noise. */}
         {/* List container: very light “sheet” (content-first, minimal chrome) */}
@@ -1386,36 +1423,41 @@ const handleTagSearchClick = (rawTag: string) => {
               isMomentumViewActive || searchViewState !== null ? 0 : task.indent;
 
             return (
-              <TaskRow
-                key={task.id}
-                task={task}
-                index={index}
-                isActive={isActive}
-                dragIndex={dragIndex}
-                effectiveIndent={effectiveIndent}
-                indentWidth={INDENT_WIDTH}
-                activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
-                onTagClick={handleTagSearchClick}
-                onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
-                onToggleMomentum={() => toggleMomentum(task)}
-                rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
-                onFocusRow={() => setActiveTaskId(task.id)}
-                onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
-                  const t = e.target as HTMLElement | null;
-                  if (t?.closest('[data-no-edit],input,textarea,button')) return;
-                  setActiveTaskId(task.id);
-                  if (editingId !== task.id) startEditing(task, task.text.length);
-                }}
-                onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
-                  handleRowKeyDownCapture(e, index, task)}
-                onPointerDown={(e: React.PointerEvent<HTMLDivElement>) =>
-                  handlePointerDown(index, e)}
-                onToggleCompleted={() => toggleCompleted(task)}
-                onDelete={() => deleteTask(task)}
-                isEditing={editingId === task.id}
-                editingText={editingId === task.id ? editingText : task.text}
-                editInputRef={editingId === task.id ? editInputRef : undefined}
-                onChangeEditingText={(value: string) => {
+              <div key={task.id}>
+                {isGlobalSearchActive && (
+                  <div className="px-2 pt-1 text-[10px] text-muted-foreground/70">
+                    {listNameById[task.listId ?? ''] ?? 'Inbox'}
+                  </div>
+                )}
+                <TaskRow
+                  task={task}
+                  index={index}
+                  isActive={isActive}
+                  dragIndex={dragIndex}
+                  effectiveIndent={effectiveIndent}
+                  indentWidth={INDENT_WIDTH}
+                  activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
+                  onTagClick={handleTagSearchClick}
+                  onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
+                  onToggleMomentum={() => toggleMomentum(task)}
+                  rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
+                  onFocusRow={() => setActiveTaskId(task.id)}
+                  onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
+                    const t = e.target as HTMLElement | null;
+                    if (t?.closest('[data-no-edit],input,textarea,button')) return;
+                    setActiveTaskId(task.id);
+                    if (editingId !== task.id) startEditing(task, task.text.length);
+                  }}
+                  onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
+                    handleRowKeyDownCapture(e, index, task)}
+                  onPointerDown={(e: React.PointerEvent<HTMLDivElement>) =>
+                    handlePointerDown(index, e)}
+                  onToggleCompleted={() => toggleCompleted(task)}
+                  onDelete={() => deleteTask(task)}
+                  isEditing={editingId === task.id}
+                  editingText={editingId === task.id ? editingText : task.text}
+                  editInputRef={editingId === task.id ? editInputRef : undefined}
+                  onChangeEditingText={(value: string) => {
                   // First mutation in an edit session establishes an undo snapshot.
                   if (
                     !editingOriginalRef.current ||
@@ -1453,21 +1495,22 @@ const handleTagSearchClick = (rawTag: string) => {
 
                   setEditingText(value);
                   if (typeof caret === 'number') setCaretPos(caret);
-                }}
-                onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
-                  handleTextareaKeyDown(e, index, task)}
-                onTextareaBlur={() => saveEdit(task)}
-                onTextClick={(e: React.MouseEvent<HTMLDivElement>) => {
-                  const el = e.currentTarget;
-                  const caret = caretOffsetFromPoint(el, e.clientX, e.clientY);
-                  setActiveTaskId(task.id);
-                  startEditing(
-                    task,
-                    Math.min(task.text.length, caret ?? task.text.length)
-                  );
-                }}
-                searchQuery={normalizedQuery}
-              />
+                  }}
+                  onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
+                    handleTextareaKeyDown(e, index, task)}
+                  onTextareaBlur={() => saveEdit(task)}
+                  onTextClick={(e: React.MouseEvent<HTMLDivElement>) => {
+                    const el = e.currentTarget;
+                    const caret = caretOffsetFromPoint(el, e.clientX, e.clientY);
+                    setActiveTaskId(task.id);
+                    startEditing(
+                      task,
+                      Math.min(task.text.length, caret ?? task.text.length)
+                    );
+                  }}
+                  searchQuery={normalizedQuery}
+                />
+              </div>
             );
           })}
           {visibleTaskEntries.length === 0 && (
