@@ -531,7 +531,11 @@ const handleTagSearchClick = (rawTag: string) => {
 
       setAllTasks(prevTasks => {
         const next = [...prevTasks];
-        next[index - 1] = {
+        const prevIndex = next.findIndex(t => t.id === prev.id);
+        const currentIndex = next.findIndex(t => t.id === task.id);
+        if (prevIndex < 0 || currentIndex < 0) return prevTasks;
+
+        next[prevIndex] = {
           ...prev,
           text: merged,
           tags: mergedTags,
@@ -540,7 +544,7 @@ const handleTagSearchClick = (rawTag: string) => {
             prev.momentum === true || task.momentum === true || parsed.momentum === true,
           meta: { tags: mergedTags },
         };
-        next.splice(index, 1);
+        next.splice(currentIndex, 1);
         return next;
       });
 
@@ -621,7 +625,11 @@ const handleTagSearchClick = (rawTag: string) => {
 
       setAllTasks(prevTasks => {
         const next = [...prevTasks];
-        next[index] = {
+        const currentIndex = next.findIndex(t => t.id === task.id);
+        const nextIndex = next.findIndex(t => t.id === nextTask.id);
+        if (currentIndex < 0 || nextIndex < 0) return prevTasks;
+
+        next[currentIndex] = {
           ...task,
           text: merged,
           tags: mergedTags,
@@ -630,7 +638,7 @@ const handleTagSearchClick = (rawTag: string) => {
             task.momentum === true || nextTask.momentum === true || parsed.momentum === true,
           meta: { tags: mergedTags },
         };
-        next.splice(index + 1, 1);
+        next.splice(nextIndex, 1);
         return next;
       });
 
