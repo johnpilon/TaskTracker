@@ -885,11 +885,6 @@ const handleTagSearchClick = (rawTag: string) => {
   const momentumCount = isMomentumView
     ? visibleTasks.length
     : tasks.filter(t => !t.completed && t.momentum === true).length;
-  const canExpandToAllLists =
-    searchViewState !== null &&
-    searchScope === 'list' &&
-    applyView(listScopedTasks, searchViewState, isMomentumViewActive).length === 0 &&
-    applyView(allListsTasks, searchViewState, isMomentumViewActive).length > 0;
   const isGlobalSearchActive = searchViewState !== null && searchScope === 'all';
   const listNameById = (() => {
     const out: Record<string, string> = {};
@@ -1064,6 +1059,41 @@ const handleTagSearchClick = (rawTag: string) => {
             </button>
           )}
         </div>
+
+        {normalizedQuery.length > 0 && (
+          <div className="mt-2 flex items-center justify-end">
+            <div className="inline-flex rounded-md border border-border/60 bg-card/20 p-0.5">
+              <button
+                type="button"
+                className={cn(
+                  'h-7 rounded-[5px] px-2 text-xs',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  searchScope === 'list'
+                    ? 'bg-card text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => setSearchScope('list')}
+              >
+                This list
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  'h-7 rounded-[5px] px-2 text-xs',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  searchScope === 'all'
+                    ? 'bg-card text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => setSearchScope('all')}
+              >
+                All lists
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Active filters represent current state.
             Recent views are navigational history and must remain visually distinct. */}
@@ -1265,26 +1295,7 @@ const handleTagSearchClick = (rawTag: string) => {
             Showing {visibleTasks.length} of {tasks.length} tasks
           </div>
         )}
-        {canExpandToAllLists && (
-          <button
-            type="button"
-            className="mt-1 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => setSearchScope('all')}
-          >
-            No results in this list. Search all lists?
-          </button>
-        )}
-        {isGlobalSearchActive && (
-          <button
-            type="button"
-            className="mt-1 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => setSearchScope('list')}
-          >
-            Showing results from all lists · Search only this list
-          </button>
-        )}
+        {/* Search scope is controlled by the scope toggle near the search input. */}
 
         {/* Task list container provides visual structure without adding noise. */}
         {/* List container: very light “sheet” (content-first, minimal chrome) */}
