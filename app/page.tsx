@@ -93,6 +93,19 @@ export default function Home() {
   const [activeListId, setActiveListId] = useState<string>('');
   const [newListName, setNewListName] = useState('');
   const effectiveActiveListId = activeListId || lists[0]?.id || '';
+  const setAllTasksForTaskCreation: typeof setAllTasks = updater => {
+    setAllTasks(prevAll => {
+      const prevIds = new Set(prevAll.map(t => t.id));
+      const nextAll = typeof updater === 'function' ? (updater as any)(prevAll) : updater;
+      return (nextAll as Task[]).map(t => {
+        // Only assign listId for newly created tasks (new ID) missing listId.
+        // This must not affect undo/restores or edits of existing tasks.
+        if (prevIds.has(t.id)) return t;
+        if (typeof t.listId === 'string' && t.listId.length > 0) return t;
+        return effectiveActiveListId ? { ...t, listId: effectiveActiveListId } : t;
+      });
+    });
+  };
   const tasks = allTasks.filter(
     t =>
       !t.archived &&
@@ -288,7 +301,7 @@ export default function Home() {
     editingId,
     editingText,
     NEW_TASK_ROW_ID,
-    setAllTasks,
+    setAllTasks: setAllTasksForTaskCreation,
     setUndoStack,
     setActiveTaskId,
     setEditingId,
