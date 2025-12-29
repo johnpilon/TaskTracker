@@ -952,69 +952,80 @@ const handleTagSearchClick = (rawTag: string) => {
           </div>
         )}
 
-        {/* First-class derived view */}
-        <div className="mt-4">
-          <div className="text-[10px] tracking-wider text-muted-foreground/70">
-            Views
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <div
-              className={cn(
-                'h-8 max-w-full',
-                'inline-flex items-center rounded-full',
-                'border border-border/70',
-                isMomentumView
-                  ? 'bg-card/30 text-foreground'
-                  : 'bg-muted/20 text-muted-foreground'
-              )}
-            >
-              <button
-                type="button"
-                className={cn(
-                  'h-full max-w-full px-3',
-                  'inline-flex items-center gap-2',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full'
-                )}
-                onMouseDown={e => {
-                  // keep focus behavior predictable on mobile/desktop
-                    commitActiveEditIfAny();
-                  e.preventDefault();
-                }}
-                onClick={() => {
-                  const next = !isMomentumViewActive;
-                  setIsMomentumViewActive(next);
-                }}
-              >
-                <span className="truncate">
-                  Momentum{isMomentumView ? ` (${momentumCount})` : ''}
-                </span>
-              </button>
+{/* First-class derived view */}
+<div className="mt-4">
+  <div className="text-[10px] tracking-wider text-muted-foreground/70">
+    Views
+  </div>
 
-              {isMomentumView && (
-                <button
-                  type="button"
-                  aria-label="Exit momentum view"
-                  className={cn(
-                    'mr-1 inline-flex h-6 w-6 items-center justify-center rounded-full',
-                    'text-muted-foreground/70 hover:text-foreground',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-                  )}
-                  onMouseDown={e => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onClick={e => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setIsMomentumViewActive(false);
-                  }}
-                >
-                  <span aria-hidden>×</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+  <div className="mt-2 flex flex-wrap gap-2">
+    <div
+      className={cn(
+        'h-8 max-w-full',
+        'inline-flex items-center rounded-full',
+        'border transition-colors',
+        isMomentumView
+          ? 'border-border bg-card/40 text-foreground'
+          : 'border-border/70 bg-muted/20 text-muted-foreground hover:bg-muted/30'
+      )}
+    >
+      <button
+        type="button"
+        className={cn(
+          'h-full max-w-full px-3',
+          'inline-flex items-center gap-2',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full'
+        )}
+        onMouseDown={e => {
+          commitActiveEditIfAny();
+          e.preventDefault();
+        }}
+        onClick={() => {
+          setIsMomentumViewActive(prev => !prev);
+        }}
+      >
+        {/* Momentum state dot */}
+                <span
+          aria-hidden
+          className={cn(
+            'block rounded-full h-2 w-2',
+            isMomentumView
+              ? 'bg-primary/70'
+              : 'bg-muted-foreground/40'
+          )}
+        />
+
+
+        <span className="truncate">
+          Momentum{isMomentumView ? ` (${momentumCount})` : ''}
+        </span>
+      </button>
+
+      {isMomentumView && (
+        <button
+          type="button"
+          aria-label="Exit momentum view"
+          className={cn(
+            'mr-1 inline-flex h-6 w-6 items-center justify-center rounded-full',
+            'text-muted-foreground/70 hover:text-foreground',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          )}
+          onMouseDown={e => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsMomentumViewActive(false);
+          }}
+        >
+          <span aria-hidden>×</span>
+        </button>
+      )}
+    </div>
+  </div>
+</div>
 
         {/* Recent views visibility is based on history existence, not input focus. */}
         {recentViews.length > 0 && (
