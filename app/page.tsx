@@ -37,6 +37,7 @@ export interface Task {
   text: string;
   createdAt: number; // unix timestamp (ms)
   order: number; // stable manual ordering
+  listId?: string;
   completed: boolean;
   completedAt?: number;
   archived: boolean;
@@ -46,6 +47,12 @@ export interface Task {
   intent?: 'now' | 'soon' | 'later';
   momentum?: boolean; // deliberate working set (boolean state)
   meta?: TaskMeta; // optional for backward compatibility
+}
+
+export interface List {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface TaskMeta {
