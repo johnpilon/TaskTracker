@@ -12,6 +12,21 @@ type StoredUIState = {
 type RestoreContextTask = { id: string; text: string };
 type RestoreContextList = { id: string };
 
+export function getPersistedActiveListId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.activeListId === 'string') {
+      return parsed.activeListId;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export function useUIStatePersistence(opts: {
   tasks: RestoreContextTask[];
   lists: RestoreContextList[];

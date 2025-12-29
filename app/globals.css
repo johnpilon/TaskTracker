@@ -11,6 +11,42 @@
 
 @layer base {
   /* ============================
+     DEFAULT FALLBACK (dark)
+     Applies before JS sets data-theme
+     ============================ */
+  :root {
+    --background: 220 10% 11%;
+    --foreground: 220 10% 92%;
+
+    --card: 220 10% 14%;
+    --card-foreground: 220 10% 92%;
+
+    --popover: 220 10% 14%;
+    --popover-foreground: 220 10% 92%;
+
+    --primary: 220 8% 80%;
+    --primary-foreground: 220 10% 12%;
+
+    --secondary: 220 10% 18%;
+    --secondary-foreground: 220 10% 92%;
+
+    --muted: 220 10% 18%;
+    --muted-foreground: 220 6% 60%;
+
+    --accent: 220 10% 22%;
+    --accent-foreground: 220 10% 92%;
+
+    --destructive: 0 60% 35%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 8% 24%;
+    --input: 220 8% 24%;
+    --ring: 220 10% 70%;
+
+    --radius: 0.5rem;
+  }
+
+  /* ============================
      LIGHT THEME
      ============================ */
 
@@ -199,6 +235,38 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* --------------------------------------------------
+   Drag UX: suppress hover effects while dragging
+   -------------------------------------------------- */
+
+@layer utilities {
+  /* When dragging, disable row hover background */
+  .dragging [role="listitem"]:hover {
+    background-color: transparent !important;
+  }
+
+  /* Suppress hover-reveal of drag handle, momentum indicator, delete button */
+  .dragging .group:hover .group-hover\:opacity-60,
+  .dragging .group:hover .group-hover\:opacity-100 {
+    opacity: 0 !important;
+  }
+
+  .dragging .group:hover .group-hover\:pointer-events-auto {
+    pointer-events: none !important;
+  }
+
+  /* Keep elements visible on the actively dragged row */
+  .dragging [role="listitem"]:has([class*="shadow-"]) .group-hover\:opacity-60,
+  .dragging [role="listitem"]:has([class*="shadow-"]) .group-hover\:opacity-100 {
+    opacity: 0.6 !important;
+  }
+
+  /* Keep momentum indicator visible if task has momentum */
+  .dragging .bg-primary\/70 {
+    opacity: 1 !important;
   }
 }
 

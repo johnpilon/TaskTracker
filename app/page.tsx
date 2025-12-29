@@ -23,7 +23,7 @@ import {
   isTagView as isTagViewFn,
   tokenizeQuery,
 } from '../lib/views';
-import { useUIStatePersistence } from '../lib/uiState';
+import { useUIStatePersistence, getPersistedActiveListId } from '../lib/uiState';
 import { useDragController } from '../lib/dragController';
 import { useFocusController } from '../lib/focusController';
 import { useKeyboardController } from '../lib/keyboardController';
@@ -82,6 +82,7 @@ export type UndoAction =
 
 const MAX_INDENT = 2;
 const INDENT_WIDTH = 28;
+const DRAG_INDENT_WIDTH = 20; // Smaller threshold for more responsive drag indent
 const NEW_TASK_ROW_ID = '__new__';
 
 /* =======================
@@ -89,10 +90,14 @@ const NEW_TASK_ROW_ID = '__new__';
 ======================= */
 
 export default function Home() {
-  const [allTasks, setAllTasks, lists, createList] = usePersistentTasks();
-  const [activeListId, setActiveListId] = useState<string>('');
+  const [allTasks, setAllTasks, lists, createList, hasHydrated, renameList, deleteList, getInboxId] = usePersistentTasks();
+  const [activeListId, setActiveListId] = useState<string>(() => getPersistedActiveListId() ?? '');
   const [newListName, setNewListName] = useState('');
+  const [editingListId, setEditingListId] = useState<string | null>(null);
+  const [editingListName, setEditingListName] = useState('');
+  const [deleteConfirmListId, setDeleteConfirmListId] = useState<string | null>(null);
   const effectiveActiveListId = activeListId || lists[0]?.id || '';
+  const inboxId = getInboxId();
   const setAllTasksForTaskCreation: typeof setAllTasks = updater => {
     setAllTasks(prevAll => {
       const prevIds = new Set(prevAll.map(t => t.id));
@@ -138,6 +143,21 @@ export default function Home() {
   };
   
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const resetDragState = () => {
+    setDragIndex(prev => (prev === null ? prev : null));
+    try {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    } catch {
+      // ignore
+    }
+    try {
+      // If a drag is mid-flight, this will trigger the controller's cleanup listener.
+      window.dispatchEvent(new Event('pointerup'));
+    } catch {
+      // ignore
+    }
+  };
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -158,7 +178,7 @@ export default function Home() {
   const { isRestoringUI } = useUIStatePersistence({
     tasks,
     lists,
-    activeListId: effectiveActiveListId,
+    activeListId: activeListId || effectiveActiveListId,
     activeTaskId,
     editingId,
     caretPos,
@@ -174,24 +194,65 @@ export default function Home() {
   useEffect(() => {
     const prev = prevEffectiveListIdRef.current;
     if (prev && prev !== effectiveActiveListId) {
+      resetDragState();
       setSearchQuery('');
       setSearchScope('list');
     }
     prevEffectiveListIdRef.current = effectiveActiveListId;
   }, [effectiveActiveListId]);
 
+  const prevSearchQueryRef = useRef<string>('');
   useEffect(() => {
+    const prev = prevSearchQueryRef.current;
+    const prevNonEmpty = prev.trim().length > 0;
+    const nextNonEmpty = searchQuery.trim().length > 0;
+    if (prevNonEmpty && !nextNonEmpty) {
+      resetDragState();
+    }
+    prevSearchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+    if (isRestoringUI) return;
     if (lists.length === 0) return;
     const valid = lists.some(l => l.id === activeListId);
     if (!valid) setActiveListId(lists[0]!.id);
-  }, [lists, activeListId]);
+  }, [hasHydrated, isRestoringUI, lists, activeListId]);
+
+  const isDragEnabled =
+    searchQuery.trim().length === 0 && searchScope === 'list' && !isMomentumViewActive;
+
+  // Drag operates on the canonical list slice (active list, not archived) to avoid cross-list corruption.
+  const dragTasks = allTasks.filter(
+    t => !t.archived && t.listId === effectiveActiveListId
+  );
+  const dragRowRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Wrapper that merges reordered dragTasks back into allTasks by id.
+  const setDragTasks: React.Dispatch<React.SetStateAction<Task[]>> = updater => {
+    setAllTasks(prevAll => {
+      const prevDrag = prevAll.filter(
+        t => !t.archived && t.listId === effectiveActiveListId
+      );
+      const nextDrag =
+        typeof updater === 'function' ? (updater as (prev: Task[]) => Task[])(prevDrag) : updater;
+      const nextById = new Map(nextDrag.map(t => [t.id, t]));
+      // Rebuild allTasks: for tasks in the drag slice, use the updated version; others unchanged.
+      const dragIds = new Set(prevDrag.map(t => t.id));
+      const otherTasks = prevAll.filter(t => !dragIds.has(t.id));
+      // Preserve order: drag tasks first (in their new order), then others.
+      return [...nextDrag, ...otherTasks];
+    });
+  };
+
   const { handlePointerDown } = useDragController<Task, UndoAction>({
-    tasks,
-    setAllTasks,
+    tasks: dragTasks,
+    setAllTasks: setDragTasks,
     setUndoStack,
     setDragIndex,
-    rowRefs,
-    INDENT_WIDTH,
+    rowRefs: dragRowRefs,
+    INDENT_WIDTH: DRAG_INDENT_WIDTH,
     MAX_INDENT,
     searchQuery,
     deriveViewState,
@@ -510,6 +571,33 @@ const handleTagSearchClick = (rawTag: string) => {
     const selEnd = el.selectionEnd ?? 0;
     const hasSelection = selStart !== selEnd;
 
+    // In derived views (search), committing an edit must never trigger structural mutations
+    // (split/merge/indent/reorder) or list-level key handling.
+    if (searchViewState !== null) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        saveEdit(task);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        saveEdit(task);
+        return;
+      }
+      // Allow native editing; block structural shortcuts below by skipping this handler.
+      if (
+        e.key === 'Tab' ||
+        e.key === 'Backspace' ||
+        e.key === 'Delete' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'ArrowDown'
+      ) {
+        return;
+      }
+    }
+
     // Backspace merge
     if (!hasSelection && e.key === 'Backspace' && selStart === 0) {
       e.preventDefault();
@@ -739,6 +827,7 @@ const handleTagSearchClick = (rawTag: string) => {
 
     // Tab / Shift+Tab indents/outdents the selected row anywhere within it.
     if (e.key === 'Tab') {
+      if (searchViewState !== null) return;
       if (shouldIgnoreTab(normalizedQuery.length)) {
         e.preventDefault();
         return;
@@ -898,31 +987,143 @@ const handleTagSearchClick = (rawTag: string) => {
         <aside className="w-56 shrink-0">
           <div className="text-[10px] tracking-wider text-muted-foreground/70">Lists</div>
           <div className="mt-2 flex flex-col gap-1">
-            {lists.map(l => (
-              <button
-                key={l.id}
-                type="button"
-                className={cn(
-                  'w-full text-left rounded-md px-2 py-1.5 text-sm',
-                  'border border-border/50',
-                  l.id === effectiveActiveListId
-                    ? 'bg-card/40 text-foreground'
-                    : 'bg-transparent text-muted-foreground hover:bg-muted/20'
-                )}
-                onMouseDown={e => {
-                  // Do not steal focus from the main list on click; keep behavior consistent.
-                  e.preventDefault();
-                }}
-                onClick={() => {
-                  commitActiveEditIfAny();
-                  setSearchQuery('');
-                  setSearchScope('list');
-                  setActiveListId(l.id);
-                }}
-              >
-                {l.name}
-              </button>
-            ))}
+            {lists.map(l => {
+              const isInbox = l.id === inboxId;
+              const isEditing = editingListId === l.id;
+              const isDeleting = deleteConfirmListId === l.id;
+
+              return (
+                <div key={l.id} className="group relative">
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      value={editingListName}
+                      onChange={e => setEditingListName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (renameList(l.id, editingListName)) {
+                            setEditingListId(null);
+                            setEditingListName('');
+                          }
+                        }
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setEditingListId(null);
+                          setEditingListName('');
+                        }
+                      }}
+                      onBlur={() => {
+                        if (editingListName.trim().length > 0) {
+                          renameList(l.id, editingListName);
+                        }
+                        setEditingListId(null);
+                        setEditingListName('');
+                      }}
+                      autoFocus
+                      className={cn(
+                        'w-full rounded-md px-2 py-1.5 text-sm',
+                        'border border-ring bg-card text-foreground',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                      )}
+                    />
+                  ) : isDeleting ? (
+                    <div className="rounded-md border border-destructive/50 bg-card p-2">
+                      <div className="text-xs text-muted-foreground mb-2">
+                        Delete "{l.name}"? Tasks will be moved to Inbox.
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="flex-1 rounded px-2 py-1 text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => {
+                            const newActiveId = deleteList(l.id);
+                            if (newActiveId && activeListId === l.id) {
+                              setActiveListId(newActiveId);
+                            }
+                            setDeleteConfirmListId(null);
+                          }}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          className="flex-1 rounded px-2 py-1 text-xs border border-border hover:bg-muted/20"
+                          onClick={() => setDeleteConfirmListId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className={cn(
+                        'w-full text-left rounded-md px-2 py-1.5 text-sm',
+                        'border border-border/50',
+                        l.id === effectiveActiveListId
+                          ? 'bg-card/40 text-foreground'
+                          : 'bg-transparent text-muted-foreground hover:bg-muted/20'
+                      )}
+                      onMouseDown={e => {
+                        // Do not steal focus from the main list on click; keep behavior consistent.
+                        e.preventDefault();
+                      }}
+                      onClick={() => {
+                        commitActiveEditIfAny();
+                        setSearchQuery('');
+                        setSearchScope('list');
+                        setActiveListId(l.id);
+                      }}
+                      onDoubleClick={() => {
+                        if (!isInbox) {
+                          setEditingListId(l.id);
+                          setEditingListName(l.name);
+                        }
+                      }}
+                    >
+                      {l.name}
+                    </button>
+                  )}
+                  {!isEditing && !isDeleting && !isInbox && (
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex gap-0.5">
+                      <button
+                        type="button"
+                        className="p-1 text-muted-foreground/70 hover:text-foreground"
+                        title="Rename list"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setEditingListId(l.id);
+                          setEditingListName(l.name);
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="p-1 text-muted-foreground/70 hover:text-destructive"
+                        title="Delete list"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setDeleteConfirmListId(l.id);
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 6h18" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="mt-4">
@@ -1298,8 +1499,11 @@ const handleTagSearchClick = (rawTag: string) => {
         {/* Search scope is controlled by the scope toggle near the search input. */}
 
         {/* Task list container provides visual structure without adding noise. */}
-        {/* List container: very light “sheet” (content-first, minimal chrome) */}
-        <div className="mt-6 rounded-lg border border-border/10 bg-transparent px-1 py-1">
+        {/* List container: very light "sheet" (content-first, minimal chrome) */}
+        <div className={cn(
+          'mt-6 rounded-lg border border-border/10 bg-transparent px-1 py-1',
+          dragIndex !== null && 'dragging'
+        )}>
           {/* Active view indicator: real left border for reliable visibility.
               Views are ephemeral and exited by clearing search. */}
           <div
@@ -1451,6 +1655,12 @@ const handleTagSearchClick = (rawTag: string) => {
             const effectiveIndent =
               isMomentumViewActive || searchViewState !== null ? 0 : task.indent;
 
+            // Compute drag index: position of this task within the canonical dragTasks slice.
+            // Only valid when drag is enabled (pure list view).
+            const dragIndexForTask = isDragEnabled
+              ? dragTasks.findIndex(t => t.id === task.id)
+              : -1;
+
             return (
               <div key={task.id}>
                 {isGlobalSearchActive && (
@@ -1469,7 +1679,12 @@ const handleTagSearchClick = (rawTag: string) => {
                   onTagClick={handleTagSearchClick}
                   onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
                   onToggleMomentum={() => toggleMomentum(task)}
-                  rowRef={(el: HTMLDivElement | null) => (rowRefs.current[index] = el)}
+                  rowRef={(el: HTMLDivElement | null) => {
+                    rowRefs.current[index] = el;
+                    if (dragIndexForTask >= 0) {
+                      dragRowRefs.current[dragIndexForTask] = el;
+                    }
+                  }}
                   onFocusRow={() => setActiveTaskId(task.id)}
                   onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
                     const t = e.target as HTMLElement | null;
@@ -1479,8 +1694,14 @@ const handleTagSearchClick = (rawTag: string) => {
                   }}
                   onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
                     handleRowKeyDownCapture(e, index, task)}
-                  onPointerDown={(e: React.PointerEvent<HTMLDivElement>) =>
-                    handlePointerDown(index, e)}
+                  onPointerDown={(e: React.PointerEvent<HTMLDivElement>) => {
+                    if (!isDragEnabled || dragIndexForTask < 0) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      return;
+                    }
+                    handlePointerDown(dragIndexForTask, e);
+                  }}
                   onToggleCompleted={() => toggleCompleted(task)}
                   onDelete={() => deleteTask(task)}
                   isEditing={editingId === task.id}
@@ -1527,7 +1748,13 @@ const handleTagSearchClick = (rawTag: string) => {
                   }}
                   onTextareaKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) =>
                     handleTextareaKeyDown(e, index, task)}
-                  onTextareaBlur={() => saveEdit(task)}
+                  onTextareaBlur={() => {
+                    if (searchViewState !== null) {
+                      saveEdit(task);
+                      return;
+                    }
+                    saveEdit(task);
+                  }}
                   onTextClick={(e: React.MouseEvent<HTMLDivElement>) => {
                     const el = e.currentTarget;
                     const caret = caretOffsetFromPoint(el, e.clientX, e.clientY);

@@ -255,12 +255,15 @@ export default function usePersistentTasks(): [
   Task[],
   React.Dispatch<React.SetStateAction<Task[]>>,
   List[],
-  (name: string) => List | null
+  (name: string) => List | null,
+  boolean,
+  (listId: string, newName: string) => boolean,
+  (listId: string) => string | null,
+  () => string | null
 ] {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [lists, setLists] = useState<List[]>([]);
-  const loadedTasksRef = useRef<Task[] | null>(null);
-  const initializedRef = useRef(false);
+  const [hasHydrated, setHasHydrated] = useState(false);
   const defaultListIdRef = useRef<string | null>(null);
 
   const getOrCreateDefaultListId = () => {
@@ -287,26 +290,21 @@ export default function usePersistentTasks(): [
     const defaultListId = getOrCreateDefaultListId();
 
     const loaded = loadTasks();
-    const migrated = loaded.map(t =>
-      typeof t.listId === 'string' && t.listId.length > 0
-        ? t
-        : { ...t, listId: defaultListId ?? undefined }
-    );
-    loadedTasksRef.current = migrated;
+    const migrated = loaded.map(t => {
+      if (typeof t.listId === 'string' && t.listId.length > 0) return t;
+      return { ...t, listId: defaultListId ?? undefined };
+    });
     // Assign missing order values based on current sequence for older payloads.
-    const withOrder = migrated.map((t: Task, idx: number) =>
-      typeof t.order === 'number' ? t : { ...t, order: idx }
-    );
+    const withOrder = migrated.map((t: Task, idx: number) => {
+      if (typeof t.order === 'number' && Number.isFinite(t.order)) return t;
+      return { ...t, order: idx };
+    });
     setTasks(sortTasks(withOrder));
+    setHasHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!initializedRef.current) {
-      if (loadedTasksRef.current && tasks === loadedTasksRef.current) {
-        initializedRef.current = true;
-      }
-      return;
-    }
+    if (!hasHydrated) return;
 
     try {
       const payload: StoredPayload = { version: STORAGE_VERSION, tasks };
@@ -352,5 +350,58 @@ export default function usePersistentTasks(): [
     return created;
   };
 
-  return [tasks, setTasksSorted, lists, createList];
+  const renameList = (listId: string, newName: string): boolean => {
+    const trimmed = newName.trim();
+    if (trimmed.length === 0) return false;
+
+    // Find the list
+    const list = lists.find(l => l.id === listId);
+    if (!list) return false;
+
+    // Inbox (first list by createdAt) cannot be renamed
+    const sorted = [...lists].sort((a, b) => a.createdAt - b.createdAt);
+    if (sorted[0]?.id === listId) return false;
+
+    setLists(prev => {
+      const next = prev.map(l => (l.id === listId ? { ...l, name: trimmed } : l));
+      persistLists(next);
+      return next;
+    });
+    return true;
+  };
+
+  const deleteList = (listId: string): string | null => {
+    // Find the list
+    const list = lists.find(l => l.id === listId);
+    if (!list) return null;
+
+    // Inbox (first list by createdAt) cannot be deleted
+    const sorted = [...lists].sort((a, b) => a.createdAt - b.createdAt);
+    const inboxId = sorted[0]?.id;
+    if (inboxId === listId) return null;
+
+    // Move all tasks from deleted list to Inbox
+    setTasks(prev => {
+      const updated = prev.map(t =>
+        t.listId === listId ? { ...t, listId: inboxId } : t
+      );
+      return sortTasks(updated);
+    });
+
+    // Remove the list
+    setLists(prev => {
+      const next = prev.filter(l => l.id !== listId);
+      persistLists(next);
+      return next;
+    });
+
+    return inboxId ?? null;
+  };
+
+  const getInboxId = (): string | null => {
+    const sorted = [...lists].sort((a, b) => a.createdAt - b.createdAt);
+    return sorted[0]?.id ?? null;
+  };
+
+  return [tasks, setTasksSorted, lists, createList, hasHydrated, renameList, deleteList, getInboxId];
 }
