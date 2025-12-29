@@ -33,7 +33,9 @@ export const filterTasksBySearch = (task: TaskLikeForView, query: string): boole
   const tagTokens = tokens.filter(t => t.startsWith('#'));
   const textTokens = tokens.filter(t => !t.startsWith('#'));
 
-  const textMatch = textTokens.every(t => text.includes(t));
+  const textMatch = textTokens.every(
+    t => text.includes(t) || tags.some(tag => tag.toLowerCase() === t)
+  );
   const tagMatch = tagTokens.every(t => {
     const needle = t.slice(1);
     if (needle.length === 0) return true;
