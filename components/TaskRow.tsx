@@ -33,6 +33,11 @@ interface TaskRowProps {
   onTextClick: unknown;
   searchQuery: string;
   onDelete: unknown;
+  movingTaskId?: string | null;
+  availableLists?: Array<{ id: string; name: string }>;
+  onShowMoveList?: () => void;
+  onMoveToList?: (targetListId: string) => void;
+  onCancelMove?: () => void;
 }
 
 /* ---------- Layout invariants ---------- */
@@ -68,6 +73,11 @@ export default function TaskRow({
   onTextClick,
   searchQuery,
   onDelete,
+  movingTaskId,
+  availableLists,
+  onShowMoveList,
+  onMoveToList,
+  onCancelMove,
 }: TaskRowProps) {
   const internalRowRef = useRef<HTMLDivElement | null>(null);
 
@@ -307,14 +317,49 @@ export default function TaskRow({
       </div>
 
       {!isEntryRow && (
-        <button
-          onClick={onDelete as any}
-          data-no-edit
-          className="absolute right-2 top-[6px] opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-destructive"
-        >
-          ×
-        </button>
+        <div className="absolute right-2 top-[6px] flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onShowMoveList as any}
+            data-no-edit
+            className="px-2 py-1 text-[11px] rounded bg-muted/40 text-muted-foreground/80 hover:text-foreground hover:bg-muted/70 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            Move
+          </button>
+          <button
+            onClick={onDelete as any}
+            data-no-edit
+            className="opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-destructive"
+          >
+            ×
+          </button>
+        </div>
       )}
+
+      {!isEntryRow &&
+        movingTaskId === task.id &&
+        availableLists &&
+        availableLists.length > 0 && (
+          <div className="absolute right-2 top-10 z-20 rounded border border-border bg-popover shadow-lg p-1 text-xs min-w-[140px] space-y-1">
+            {availableLists.map(list => (
+              <button
+                key={list.id}
+                type="button"
+                className="w-full text-left px-2 py-1 rounded hover:bg-muted"
+                onClick={() => (onMoveToList as any)?.(list.id)}
+              >
+                {list.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 rounded text-muted-foreground hover:bg-muted"
+              onClick={onCancelMove as any}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
     </div>
   );
 }

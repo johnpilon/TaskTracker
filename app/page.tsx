@@ -114,11 +114,9 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const searchViewState = deriveViewState(searchQuery);
   const [searchScope, setSearchScope] = useState<'list' | 'all'>('list');
-  const listScopedTasks = allTasks.filter(
-    t =>
-      !t.archived &&
-      (effectiveActiveListId ? t.listId === effectiveActiveListId : true)
-  );
+  const listScopedTasks = effectiveActiveListId
+    ? allTasks.filter(t => !t.archived && t.listId === effectiveActiveListId)
+    : allTasks.filter(t => !t.archived);
   const allListsTasks = allTasks.filter(t => !t.archived);
   const tasks =
     searchScope === 'all' && searchViewState !== null ? allListsTasks : listScopedTasks;
@@ -126,6 +124,7 @@ export default function Home() {
   const [isMomentumViewActive, setIsMomentumViewActive] = useState(false);
 
   const [activeTaskId, setActiveTaskId] = useState<string>(NEW_TASK_ROW_ID);
+  const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -220,6 +219,35 @@ export default function Home() {
     if (!valid) setActiveListId(lists[0]!.id);
   }, [hasHydrated, isRestoringUI, lists, activeListId]);
 
+  // One-time migration to ensure all tasks have listId and intent
+  const listIdMigrationDoneRef = useRef(false);
+  useEffect(() => {
+    if (!hasHydrated) return;
+    if (listIdMigrationDoneRef.current) return; // Only run once
+    const fallbackListId = getInboxId() || effectiveActiveListId;
+    if (!fallbackListId) return;
+    listIdMigrationDoneRef.current = true;
+    setAllTasks(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        let updated = t;
+        // Migrate missing listId
+        if (!t.listId) {
+          changed = true;
+          updated = { ...updated, listId: fallbackListId };
+        }
+        // Migrate missing intent to 'now' so all tasks can be freely reordered
+        if (!t.intent && !t.archived && !t.completed) {
+          changed = true;
+          updated = { ...updated, intent: 'now' as const };
+        }
+        return updated;
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasHydrated]);
+
   const isDragEnabled =
     searchQuery.trim().length === 0 && searchScope === 'list' && !isMomentumViewActive;
 
@@ -227,31 +255,20 @@ export default function Home() {
   const dragTasks = allTasks.filter(
     t => !t.archived && t.listId === effectiveActiveListId
   );
-  const dragRowRefs = useRef<(HTMLDivElement | null)[]>([]);
-
-  // Wrapper that merges reordered dragTasks back into allTasks by id.
-  const setDragTasks: React.Dispatch<React.SetStateAction<Task[]>> = updater => {
-    setAllTasks(prevAll => {
-      const prevDrag = prevAll.filter(
-        t => !t.archived && t.listId === effectiveActiveListId
-      );
-      const nextDrag =
-        typeof updater === 'function' ? (updater as (prev: Task[]) => Task[])(prevDrag) : updater;
-      const nextById = new Map(nextDrag.map(t => [t.id, t]));
-      // Rebuild allTasks: for tasks in the drag slice, use the updated version; others unchanged.
-      const dragIds = new Set(prevDrag.map(t => t.id));
-      const otherTasks = prevAll.filter(t => !dragIds.has(t.id));
-      // Preserve order: drag tasks first (in their new order), then others.
-      return [...nextDrag, ...otherTasks];
-    });
-  };
+  // Use Map<taskId, element> for stable ref tracking during drag (indices change after moves)
+  const dragRowRefsByIdRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  
+  // Store current listId in a ref so drag callbacks can access it
+  const effectiveActiveListIdRef = useRef(effectiveActiveListId);
+  effectiveActiveListIdRef.current = effectiveActiveListId;
 
   const { handlePointerDown } = useDragController<Task, UndoAction>({
     tasks: dragTasks,
-    setAllTasks: setDragTasks,
+    setAllTasks: setAllTasks,
     setUndoStack,
     setDragIndex,
-    rowRefs: dragRowRefs,
+    rowRefsByIdRef: dragRowRefsByIdRef,
+    activeListId: effectiveActiveListId,
     INDENT_WIDTH: DRAG_INDENT_WIDTH,
     MAX_INDENT,
     searchQuery,
@@ -377,6 +394,7 @@ export default function Home() {
     editingId,
     editingText,
     NEW_TASK_ROW_ID,
+    activeListId: effectiveActiveListId,
     setAllTasks: setAllTasksForTaskCreation,
     setUndoStack,
     setActiveTaskId,
@@ -1531,6 +1549,7 @@ const handleTagSearchClick = (rawTag: string) => {
               tags: [],
               momentum: false,
               meta: { tags: [] },
+              listId: effectiveActiveListId,
             }}
             index={-1}
             isEntryRow
@@ -1681,8 +1700,11 @@ const handleTagSearchClick = (rawTag: string) => {
                   onToggleMomentum={() => toggleMomentum(task)}
                   rowRef={(el: HTMLDivElement | null) => {
                     rowRefs.current[index] = el;
-                    if (dragIndexForTask >= 0) {
-                      dragRowRefs.current[dragIndexForTask] = el;
+                    // Track by task ID for stable drag ref lookup
+                    if (el) {
+                      dragRowRefsByIdRef.current.set(task.id, el);
+                    } else {
+                      dragRowRefsByIdRef.current.delete(task.id);
                     }
                   }}
                   onFocusRow={() => setActiveTaskId(task.id)}
@@ -1704,6 +1726,26 @@ const handleTagSearchClick = (rawTag: string) => {
                   }}
                   onToggleCompleted={() => toggleCompleted(task)}
                   onDelete={() => deleteTask(task)}
+                  movingTaskId={movingTaskId}
+                  availableLists={lists.filter(l => l.id !== task.listId)}
+                  onShowMoveList={() => setMovingTaskId(task.id)}
+                  onMoveToList={(targetListId: string) => {
+                    setAllTasks(prev => {
+                      const moving = prev.find(t => t.id === task.id);
+                      if (!moving) return prev;
+                      const updated = { ...moving, listId: targetListId };
+                      const remaining = prev.filter(t => t.id !== task.id);
+                      const insertAt = remaining.findIndex(t => t.listId === targetListId);
+                      if (insertAt === -1) return [...remaining, updated];
+                      return [
+                        ...remaining.slice(0, insertAt),
+                        updated,
+                        ...remaining.slice(insertAt),
+                      ];
+                    });
+                    setMovingTaskId(null);
+                  }}
+                  onCancelMove={() => setMovingTaskId(null)}
                   isEditing={editingId === task.id}
                   editingText={editingId === task.id ? editingText : task.text}
                   editInputRef={editingId === task.id ? editInputRef : undefined}

@@ -9,6 +9,7 @@ export type EditingControllerDeps = {
   editingId: string | null;
   editingText: string;
   NEW_TASK_ROW_ID: string;
+  activeListId: string;
 
   setAllTasks: SetTasks;
   setUndoStack: SetState<UndoAction[]>;
@@ -139,6 +140,7 @@ export function createEditingController(deps: EditingControllerDeps) {
         archived: false,
         indent: 0,
         tags: parsed.tags,
+        listId: deps.activeListId,
         ...(parsed.intent ? { intent: parsed.intent } : { intent: 'now' }),
         momentum: parsed.momentum === true,
         meta: { tags: parsed.tags },
@@ -274,8 +276,10 @@ export function createEditingController(deps: EditingControllerDeps) {
         completed: false,
         archived: false,
         indent: current.indent,
+        listId: task.listId ?? deps.activeListId,
         tags: [],
-        ...(rightParsed.intent ? { intent: rightParsed.intent } : {}),
+        // Default to 'now' intent so tasks can be freely reordered (same as commitNewTaskFromRow)
+        ...(rightParsed.intent ? { intent: rightParsed.intent } : { intent: 'now' }),
         momentum: rightParsed.momentum === true,
         meta: { tags: [] },
       };
