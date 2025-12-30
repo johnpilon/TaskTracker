@@ -328,8 +328,14 @@ export default function usePersistentTasks(): [
           ? t
           : { ...t, listId: defaultListId ?? undefined }
       );
+      // Ensure all active tasks have intent for consistent sorting
+      const withIntent = withListId.map((t: Task) =>
+        t.archived || t.completed || t.intent
+          ? t
+          : { ...t, intent: 'now' as const }
+      );
       // Reindex order to preserve manual ordering across updates.
-      const reindexed = withListId.map((t: Task, idx: number) =>
+      const reindexed = withIntent.map((t: Task, idx: number) =>
         t.archived || t.completed ? t : { ...t, order: idx }
       );
       return sortTasks(reindexed);

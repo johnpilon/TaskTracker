@@ -264,7 +264,8 @@ export function createEditingController(deps: EditingControllerDeps) {
         ...current,
         text: leftText,
         tags: originalTags,
-        ...(leftParsed.intent ? { intent: leftParsed.intent } : { intent: undefined }),
+        // Preserve original intent, or keep 'now' if it had one, to maintain sort order
+        intent: leftParsed.intent ?? current.intent ?? 'now',
         ...(leftParsed.momentum ? { momentum: true } : {}),
         meta: { tags: originalTags },
       };
