@@ -1,243 +1,339 @@
-import { useRef } from 'react';
-import type React from 'react';
+import { useState, useRef, useCallback } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragStartEvent,
+  DragMoveEvent,
+  DragEndEvent,
+  DragCancelEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const DEBUG_DRAG = false; // Set to true for debugging
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface DragControllerOptions<
+  TTask extends { id: string; indent: number; listId?: string; archived?: boolean },
+  TUndoAction = unknown,
+> {
+  tasks: TTask[];
+  setAllTasks: Dispatch<SetStateAction<TTask[]>>;
+  setUndoStack: Dispatch<SetStateAction<TUndoAction[]>>;
+  activeListId: string;
+  INDENT_WIDTH: number;
+  MAX_INDENT: number;
+  disabled?: boolean;
+}
+
+export interface DragState {
+  activeId: string | null;
+  activeIndex: number | null;
+  overIndex: number | null;
+  deltaX: number;
+  currentIndent: number | null;
+  indentChanged: boolean; // Brief flag for snap animation
+}
+
+// ============================================================================
+// Hook: useDragController
+// ============================================================================
 
 export function useDragController<
   TTask extends { id: string; indent: number; listId?: string; archived?: boolean },
   TUndoAction = unknown,
->(opts: {
-  tasks: TTask[];
-  setAllTasks: Dispatch<SetStateAction<TTask[]>>;
-  setUndoStack: Dispatch<SetStateAction<TUndoAction[]>>;
-  setDragIndex: (index: number | null) => void;
-  setDragTargetIndex: (index: number | null) => void;
-  rowRefsByIdRef: { current: Map<string, HTMLDivElement> };
-  activeListId: string;
-  INDENT_WIDTH: number;
-  MAX_INDENT: number;
-  searchQuery: string;
-  deriveViewState: (raw: string) => unknown | null;
-}) {
+>(opts: DragControllerOptions<TTask, TUndoAction>) {
   const {
     tasks,
     setAllTasks,
     setUndoStack,
-    setDragIndex,
-    setDragTargetIndex,
-    rowRefsByIdRef,
     activeListId,
     INDENT_WIDTH,
     MAX_INDENT,
-    searchQuery,
-    deriveViewState,
+    disabled = false,
   } = opts;
 
-  const dragIndexRef = useRef<number | null>(null);
-  const dragStartXRef = useRef<number | null>(null);
-  const baseIndentRef = useRef<number | null>(null);
-  const rafRef = useRef<number | null>(null);
-  // Track current task order during drag to handle closure issues
-  const taskOrderRef = useRef<TTask[]>([]);
-  // Prevent concurrent moves during state updates
-  const moveInProgressRef = useRef(false);
+  // Drag state
+  const [dragState, setDragState] = useState<DragState>({
+    activeId: null,
+    activeIndex: null,
+    overIndex: null,
+    deltaX: 0,
+    currentIndent: null,
+    indentChanged: false,
+  });
 
-  const handlePointerDown = (index: number, e: React.PointerEvent) => {
-    // Search is a view (lens) over the underlying list; while a view is active,
-    // disable drag/reorder to avoid surprising mutations.
-    if (deriveViewState(searchQuery)) {
-      e.preventDefault();
-      return;
-    }
-    e.preventDefault();
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  // Ref for indent change animation timeout
+  const indentAnimationRef = useRef<NodeJS.Timeout | null>(null);
 
-    document.body.style.cursor = 'grabbing';
-    document.body.style.userSelect = 'none';
+  // Refs to track drag start state (for indent calculation)
+  const dragStartXRef = useRef<number>(0);
+  const baseIndentRef = useRef<number>(0);
+  const undoSnapshotTakenRef = useRef<boolean>(false);
 
-    setDragIndex(index);
-    setDragTargetIndex(index); // Initially, target is same as source
-    dragIndexRef.current = index;
-    taskOrderRef.current = [...tasks]; // Snapshot task order at drag start
+  // Configure sensors - require small movement before drag activates
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5, // 5px movement required
+      },
+    })
+  );
+
+  // -------------------------------------------------------------------------
+  // Handlers
+  // -------------------------------------------------------------------------
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event;
+    const activeId = active.id as string;
+    const activeIndex = tasks.findIndex(t => t.id === activeId);
+
+    if (activeIndex === -1) return;
+
+    const task = tasks[activeIndex];
 
     if (DEBUG_DRAG) {
       console.log('=== DRAG START ===');
-      console.log('Drag index:', index);
-      console.log('Task being dragged:', (tasks[index] as any).text, 'id:', tasks[index].id);
-      console.log('taskOrderRef.current:', taskOrderRef.current.map((t: any, i: number) => `${i}: ${t.text} (${t.id.slice(0, 8)})`));
+      console.log('Active ID:', activeId);
+      console.log('Active Index:', activeIndex);
+      console.log('Task:', (task as any).text);
     }
 
-    dragStartXRef.current = e.clientX;
-    baseIndentRef.current = tasks[index].indent;
+    // Store initial X position for indent calculation
+    const pointerEvent = event.activatorEvent as PointerEvent;
+    dragStartXRef.current = pointerEvent?.clientX ?? 0;
+    baseIndentRef.current = task.indent;
+    undoSnapshotTakenRef.current = false;
 
-// Snapshot before indent for undo
-setUndoStack(stack => [
-  ...stack,
-  {
-    type: 'indent',
-    task: structuredClone(tasks[index]),
-  } as TUndoAction,
-]);
+    setDragState({
+      activeId,
+      activeIndex,
+      overIndex: activeIndex,
+      deltaX: 0,
+      currentIndent: task.indent,
+      indentChanged: false,
+    });
+  }, [tasks]);
 
+  const handleDragMove = useCallback((event: DragMoveEvent) => {
+    const { active, over, delta } = event;
+    if (!active) return;
 
-    const handlePointerMove = (ev: PointerEvent) => {
-      if (rafRef.current) return;
-      if (moveInProgressRef.current) return; // Don't queue new moves while one is in progress
+    const activeId = active.id as string;
+    const activeIndex = tasks.findIndex(t => t.id === activeId);
+    const overIndex = over ? tasks.findIndex(t => t.id === over.id) : activeIndex;
 
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
+    // Calculate horizontal delta for indent
+    const deltaX = delta.x;
 
-        const currentIndex = dragIndexRef.current;
-        if (currentIndex === null) return;
-        if (moveInProgressRef.current) return; // Double-check
+    // Handle indent changes during drag
+    const step = Math.trunc(deltaX / INDENT_WIDTH);
+    const task = activeIndex !== -1 ? tasks[activeIndex] : null;
+    const targetIndent = task 
+      ? Math.max(0, Math.min(MAX_INDENT, baseIndentRef.current + step))
+      : null;
 
-        const x = ev.clientX;
-        const y = ev.clientY;
+    setDragState(prev => ({
+      ...prev,
+      overIndex: overIndex !== -1 ? overIndex : prev.overIndex,
+      deltaX,
+      currentIndent: targetIndent,
+      indentChanged: false, // Will be set to true below if indent actually changes
+    }));
 
-        // Horizontal indent
-        const deltaX = x - (dragStartXRef.current ?? x);
-        const step = Math.trunc(deltaX / INDENT_WIDTH);
+    if (task && targetIndent !== null && targetIndent !== task.indent) {
+      // Take undo snapshot before first mutation
+      if (!undoSnapshotTakenRef.current) {
+        undoSnapshotTakenRef.current = true;
+        setUndoStack(stack => [
+          ...stack,
+          {
+            type: 'indent',
+            task: structuredClone(task),
+          } as TUndoAction,
+        ]);
+      }
 
-        if (step !== 0 && baseIndentRef.current !== null) {
-          const targetIndent = Math.max(
-            0,
-            Math.min(MAX_INDENT, baseIndentRef.current + step)
-          );
+      if (DEBUG_DRAG) {
+        console.log(`Indent change: ${task.indent} -> ${targetIndent}`);
+      }
 
-          // Get the task ID for the indent operation (stable across different array orders)
-          const draggedTask = taskOrderRef.current[currentIndex];
-          if (draggedTask) {
-            const draggedId = draggedTask.id;
-
-            // Update taskOrderRef with new indent
-            taskOrderRef.current = taskOrderRef.current.map(t =>
-              t.id === draggedId ? { ...t, indent: targetIndent } : t
-            );
-
-            setAllTasks(prevAll => {
-              return prevAll.map(t =>
-                t.id === draggedId ? { ...t, indent: targetIndent } : t
-              );
-            });
-
-            dragStartXRef.current = x;
-            baseIndentRef.current = targetIndent;
-          }
-        }
-
-        // Vertical reorder
-        // Use task IDs to look up DOM elements since indices change during drag
-        const getRowElement = (index: number): HTMLDivElement | null => {
-          const task = taskOrderRef.current[index];
-          if (!task) {
-            if (DEBUG_DRAG && index >= 0 && index < taskOrderRef.current.length + 1) {
-              console.log(`getRowElement(${index}): no task at this index (length: ${taskOrderRef.current.length})`);
-            }
-            return null;
-          }
-          const el = rowRefsByIdRef.current.get(task.id) ?? null;
-          if (DEBUG_DRAG && !el) {
-            console.log(`getRowElement(${index}): task ${(task as any).text} (${task.id.slice(0, 8)}) has no DOM ref`);
-          }
-          return el;
-        };
-
-        const move = (from: number, to: number) => {
-          if (moveInProgressRef.current) return; // Prevent concurrent moves
-          moveInProgressRef.current = true;
-
-          if (DEBUG_DRAG) {
-            const fromTask = taskOrderRef.current[from] as any;
-            const toTask = taskOrderRef.current[to] as any;
-            console.log(`=== MOVE ${from} -> ${to} ===`);
-            console.log(`Moving: ${fromTask?.text} (${fromTask?.id?.slice(0, 8)})`);
-            console.log(`Target position occupied by: ${toTask?.text} (${toTask?.id?.slice(0, 8)})`);
-          }
-
-          // Update our local task order ref immediately
-          const orderCopy = [...taskOrderRef.current];
-          const [moved] = orderCopy.splice(from, 1);
-          orderCopy.splice(to, 0, moved);
-          taskOrderRef.current = orderCopy;
-
-          // Update drag index ref and target index
-          dragIndexRef.current = to;
-          setDragTargetIndex(to); // Update visual indicator
-
-          // Sync state: merge reordered drag slice back into allTasks
-          setAllTasks(prevAll => {
-            // Build the new drag slice order using taskOrderRef
-            const dragSliceIds = new Set(taskOrderRef.current.map(t => t.id));
-            const byId = new Map(prevAll.map(t => [t.id, t]));
-            
-            // Get updated tasks in new order
-            const reorderedDragSlice = taskOrderRef.current
-              .map(t => byId.get(t.id))
-              .filter((t): t is TTask => t !== undefined);
-            
-            // Keep non-drag tasks (other lists, archived)
-            const nonDragTasks = prevAll.filter(t => !dragSliceIds.has(t.id));
-            
-            if (DEBUG_DRAG) {
-              console.log('setAllTasks - reorderedDragSlice:', reorderedDragSlice.map((t: any) => `${t.text} (intent: ${t.intent ?? 'none'})`));
-            }
-            
-            // Return: drag slice in new order, then other tasks
-            return [...reorderedDragSlice, ...nonDragTasks];
-          });
-
-          // Allow next move after a small delay to let state settle
-          setTimeout(() => {
-            moveInProgressRef.current = false;
-          }, 16); // ~1 frame
-        };
-
-        const down = getRowElement(currentIndex + 1);
-        if (down) {
-          const r = down.getBoundingClientRect();
-          if (y > r.top + r.height / 2) {
-            if (DEBUG_DRAG) {
-              const downTask = taskOrderRef.current[currentIndex + 1] as any;
-              console.log(`Crossing DOWN: y=${y.toFixed(0)}, rowMid=${(r.top + r.height / 2).toFixed(0)}, task: ${downTask?.text}`);
-            }
-            move(currentIndex, currentIndex + 1);
-            return;
-          }
-        }
-
-        const up = getRowElement(currentIndex - 1);
-        if (up) {
-          const r = up.getBoundingClientRect();
-          if (y < r.top + r.height / 2) {
-            if (DEBUG_DRAG) {
-              const upTask = taskOrderRef.current[currentIndex - 1] as any;
-              console.log(`Crossing UP: y=${y.toFixed(0)}, rowMid=${(r.top + r.height / 2).toFixed(0)}, task: ${upTask?.text}`);
-            }
-            move(currentIndex, currentIndex - 1);
-          }
-        }
+      // Update the task indent
+      setAllTasks(prevAll => {
+        return prevAll.map(t =>
+          t.id === activeId ? { ...t, indent: targetIndent } : t
+        );
       });
-    };
 
-    const handlePointerUp = () => {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      dragIndexRef.current = null;
-      setDragIndex(null);
-      setDragTargetIndex(null);
-      dragStartXRef.current = null;
-      baseIndentRef.current = null;
-      moveInProgressRef.current = false; // Reset move lock
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
+      // Trigger snap animation
+      setDragState(prev => ({ ...prev, indentChanged: true }));
+      
+      // Clear the animation flag after a short delay
+      if (indentAnimationRef.current) {
+        clearTimeout(indentAnimationRef.current);
+      }
+      indentAnimationRef.current = setTimeout(() => {
+        setDragState(prev => ({ ...prev, indentChanged: false }));
+      }, 150);
+    }
+  }, [tasks, INDENT_WIDTH, MAX_INDENT, setAllTasks, setUndoStack]);
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (DEBUG_DRAG) {
+      console.log('=== DRAG END ===');
+      console.log('Active:', active?.id);
+      console.log('Over:', over?.id);
+    }
+
+    if (active && over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = over.id as string;
+
+      setAllTasks(prevAll => {
+        // Find indices in the full task list
+        const oldIndex = prevAll.findIndex(t => t.id === activeId);
+        const newIndex = prevAll.findIndex(t => t.id === overId);
+
+        if (oldIndex === -1 || newIndex === -1) return prevAll;
+
+        if (DEBUG_DRAG) {
+          console.log(`Reorder: ${oldIndex} -> ${newIndex}`);
+        }
+
+        // Perform the reorder
+        const next = [...prevAll];
+        const [moved] = next.splice(oldIndex, 1);
+        next.splice(newIndex, 0, moved);
+
+        return next;
+      });
+    }
+
+    // Reset drag state
+    setDragState({
+      activeId: null,
+      activeIndex: null,
+      overIndex: null,
+      deltaX: 0,
+      currentIndent: null,
+      indentChanged: false,
+    });
+    dragStartXRef.current = 0;
+    baseIndentRef.current = 0;
+    undoSnapshotTakenRef.current = false;
+    if (indentAnimationRef.current) {
+      clearTimeout(indentAnimationRef.current);
+      indentAnimationRef.current = null;
+    }
+  }, [setAllTasks]);
+
+  const handleDragCancel = useCallback((event: DragCancelEvent) => {
+    if (DEBUG_DRAG) {
+      console.log('=== DRAG CANCEL ===');
+    }
+
+    setDragState({
+      activeId: null,
+      activeIndex: null,
+      overIndex: null,
+      deltaX: 0,
+      currentIndent: null,
+      indentChanged: false,
+    });
+    dragStartXRef.current = 0;
+    baseIndentRef.current = 0;
+    undoSnapshotTakenRef.current = false;
+    if (indentAnimationRef.current) {
+      clearTimeout(indentAnimationRef.current);
+      indentAnimationRef.current = null;
+    }
+  }, []);
+
+  return {
+    // DndContext props
+    sensors,
+    collisionDetection: closestCenter,
+    onDragStart: handleDragStart,
+    onDragMove: handleDragMove,
+    onDragEnd: handleDragEnd,
+    onDragCancel: handleDragCancel,
+    // State for UI feedback
+    dragState,
+    // Helpers
+    disabled,
   };
-
-  return { handlePointerDown };
 }
 
+// ============================================================================
+// Hook: useSortableTask (wrapper around useSortable)
+// ============================================================================
 
+export function useSortableTask(
+  id: string, 
+  disabled: boolean = false,
+  snapGridX: number = 0 // If > 0, snap horizontal movement to this grid size
+) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({ id, disabled });
+
+  // Snap horizontal movement to grid if specified
+  let snappedTransform = transform;
+  let justSnapped = false;
+  if (transform && snapGridX > 0) {
+    const snappedX = Math.round(transform.x / snapGridX) * snapGridX;
+    // Check if we're near a snap point (within 3px means we just snapped)
+    justSnapped = Math.abs(transform.x - snappedX) < 3 && snappedX !== 0;
+    snappedTransform = {
+      ...transform,
+      x: snappedX,
+    };
+  }
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(snappedTransform),
+    // Quick, snappy transition
+    transition: isDragging 
+      ? 'transform 30ms cubic-bezier(0.25, 0.1, 0.25, 1)' 
+      : transition,
+    zIndex: isDragging ? 1000 : 'auto',
+  };
+
+  return {
+    sortableProps: {
+      ref: setNodeRef,
+      style,
+      ...attributes,
+      ...listeners, // Include listeners for drag activation
+    },
+    dragHandleProps: listeners,
+    isDragging,
+    isOver,
+  };
+}
+
+// ============================================================================
+// Re-exports for convenience
+// ============================================================================
+
+export { DndContext, SortableContext, verticalListSortingStrategy };

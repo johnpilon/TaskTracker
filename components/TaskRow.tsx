@@ -13,6 +13,8 @@ interface TaskRowProps {
   dragTargetIndex?: number | null;
   effectiveIndent: number;
   indentWidth: number;
+  maxIndent?: number;
+  showIndentGuides?: boolean;
   isEntryRow?: boolean;
   containerClassName?: string;
   activeTags?: string[];
@@ -54,6 +56,8 @@ export default function TaskRow({
   dragTargetIndex,
   effectiveIndent,
   indentWidth,
+  maxIndent = 2,
+  showIndentGuides,
   isEntryRow,
   containerClassName,
   activeTags,
@@ -158,6 +162,24 @@ export default function TaskRow({
           aria-hidden
           className="pointer-events-none absolute -top-[2px] left-2 right-2 h-1 bg-primary rounded-full"
         />
+      )}
+
+      {/* Indent guides - visible during drag */}
+      {showIndentGuides && (
+        <div className="absolute inset-y-0 left-0 pointer-events-none">
+          {Array.from({ length: maxIndent + 1 }, (_, i) => (
+            <div
+              key={i}
+              className={cn(
+                'absolute top-1 bottom-1 w-0.5 rounded-full transition-colors duration-75',
+                i === effectiveIndent 
+                  ? 'bg-primary/60' 
+                  : 'bg-muted-foreground/20'
+              )}
+              style={{ left: `${8 + i * indentWidth}px` }}
+            />
+          ))}
+        </div>
       )}
 
       {/* Indent spacing */}

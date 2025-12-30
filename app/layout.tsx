@@ -36,7 +36,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
 
   title: {
-    default: 'TaskTrcker',
+    default: 'TaskTracker',
     template: '%s · TaskTracker',
   },
 

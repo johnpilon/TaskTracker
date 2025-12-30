@@ -24,7 +24,52 @@ import {
   tokenizeQuery,
 } from '../lib/views';
 import { useUIStatePersistence, getPersistedActiveListId } from '../lib/uiState';
-import { useDragController } from '../lib/dragController';
+import {
+  useDragController,
+  useSortableTask,
+  DndContext,
+  SortableContext,
+  verticalListSortingStrategy,
+} from '../lib/dragController';
+
+// Sortable wrapper for task items
+function SortableTaskItem({ 
+  id, 
+  disabled, 
+  children,
+  indentSnap,
+  snapGridX = 0,
+}: { 
+  id: string; 
+  disabled: boolean; 
+  children: React.ReactNode;
+  indentSnap?: boolean;
+  snapGridX?: number;
+}) {
+  const { sortableProps, isDragging, isOver } = useSortableTask(id, disabled, snapGridX);
+  
+  return (
+    <div 
+      {...sortableProps} 
+      className={cn(
+        'relative',
+        isDragging && 'ring-2 ring-primary/50 rounded-sm bg-background',
+        // Strong visual pulse on indent snap
+        isDragging && indentSnap && 'ring-4 ring-primary shadow-xl shadow-primary/30 scale-[1.02]',
+        isOver && !isDragging && 'before:absolute before:inset-x-2 before:-top-0.5 before:h-1 before:bg-primary before:rounded-full'
+      )}
+      style={{
+        ...sortableProps.style,
+        // Quick transition for snap effects
+        transition: isDragging 
+          ? 'transform 30ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 100ms ease-out, ring 100ms ease-out, scale 100ms ease-out'
+          : sortableProps.style?.transition,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 import { useFocusController } from '../lib/focusController';
 import { useKeyboardController } from '../lib/keyboardController';
 
@@ -141,23 +186,8 @@ export default function Home() {
     });
   };
   
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dragTargetIndex, setDragTargetIndex] = useState<number | null>(null);
   const resetDragState = () => {
-    setDragIndex(prev => (prev === null ? prev : null));
-    setDragTargetIndex(null);
-    try {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    } catch {
-      // ignore
-    }
-    try {
-      // If a drag is mid-flight, this will trigger the controller's cleanup listener.
-      window.dispatchEvent(new Event('pointerup'));
-    } catch {
-      // ignore
-    }
+    // No-op now - dnd-kit handles cleanup
   };
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -257,26 +287,29 @@ export default function Home() {
   const dragTasks = allTasks.filter(
     t => !t.archived && t.listId === effectiveActiveListId
   );
-  // Use Map<taskId, element> for stable ref tracking during drag (indices change after moves)
-  const dragRowRefsByIdRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  
-  // Store current listId in a ref so drag callbacks can access it
-  const effectiveActiveListIdRef = useRef(effectiveActiveListId);
-  effectiveActiveListIdRef.current = effectiveActiveListId;
 
-  const { handlePointerDown } = useDragController<Task, UndoAction>({
+  // dnd-kit based drag controller
+  const {
+    sensors,
+    collisionDetection,
+    onDragStart,
+    onDragMove,
+    onDragEnd,
+    onDragCancel,
+    dragState,
+  } = useDragController<Task, UndoAction>({
     tasks: dragTasks,
     setAllTasks: setAllTasks,
     setUndoStack,
-    setDragIndex,
-    setDragTargetIndex,
-    rowRefsByIdRef: dragRowRefsByIdRef,
     activeListId: effectiveActiveListId,
     INDENT_WIDTH: DRAG_INDENT_WIDTH,
     MAX_INDENT,
-    searchQuery,
-    deriveViewState,
+    disabled: !isDragEnabled,
   });
+
+  // Derive drag indices from dragState for UI feedback
+  const dragIndex = dragState.activeIndex;
+  const dragTargetIndex = dragState.overIndex;
 
   const createId = () =>
     `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1670,65 +1703,76 @@ const handleTagSearchClick = (rawTag: string) => {
             searchQuery={normalizedQuery}
           />
 
-          {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
-            const isActive = activeTaskId === task.id;
+          <DndContext
+            sensors={sensors}
+            collisionDetection={collisionDetection}
+            onDragStart={onDragStart}
+            onDragMove={onDragMove}
+            onDragEnd={onDragEnd}
+            onDragCancel={onDragCancel}
+          >
+            <SortableContext
+              items={isDragEnabled ? dragTasks.map(t => t.id) : []}
+              strategy={verticalListSortingStrategy}
+            >
+              {visibleTaskEntries.map(({ task, index }, visibleIndex) => {
+                const isActive = activeTaskId === task.id;
 
-            // When a view is active, hierarchy is flattened for clarity.
-            // Views are lenses, not structure.
-            const effectiveIndent =
-              isMomentumViewActive || searchViewState !== null ? 0 : task.indent;
+                // When a view is active, hierarchy is flattened for clarity.
+                // Views are lenses, not structure.
+                const effectiveIndent =
+                  isMomentumViewActive || searchViewState !== null ? 0 : task.indent;
 
-            // Compute drag index: position of this task within the canonical dragTasks slice.
-            // Only valid when drag is enabled (pure list view).
-            const dragIndexForTask = isDragEnabled
-              ? dragTasks.findIndex(t => t.id === task.id)
-              : -1;
+                // Compute drag index: position of this task within the canonical dragTasks slice.
+                // Only valid when drag is enabled (pure list view).
+                const dragIndexForTask = isDragEnabled
+                  ? dragTasks.findIndex(t => t.id === task.id)
+                  : -1;
 
-            return (
-              <div key={task.id}>
-                {isGlobalSearchActive && (
-                  <div className="px-2 pt-1 text-[10px] text-muted-foreground/70">
-                    {listNameById[task.listId ?? ''] ?? 'Inbox'}
-                  </div>
-                )}
-                <TaskRow
-                  task={task}
-                  index={index}
-                  isActive={isActive}
-                  dragIndex={dragIndex}
-                  dragTargetIndex={dragTargetIndex}
-                  effectiveIndent={effectiveIndent}
-                  indentWidth={INDENT_WIDTH}
-                  activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
-                  onTagClick={handleTagSearchClick}
-                  onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
-                  onToggleMomentum={() => toggleMomentum(task)}
-                  rowRef={(el: HTMLDivElement | null) => {
-                    rowRefs.current[index] = el;
-                    // Track by task ID for stable drag ref lookup
-                    if (el) {
-                      dragRowRefsByIdRef.current.set(task.id, el);
-                    } else {
-                      dragRowRefsByIdRef.current.delete(task.id);
-                    }
-                  }}
-                  onFocusRow={() => setActiveTaskId(task.id)}
-                  onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
-                    const t = e.target as HTMLElement | null;
-                    if (t?.closest('[data-no-edit],input,textarea,button')) return;
-                    setActiveTaskId(task.id);
-                    if (editingId !== task.id) startEditing(task, task.text.length);
-                  }}
-                  onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
-                    handleRowKeyDownCapture(e, index, task)}
-                  onPointerDown={(e: React.PointerEvent<HTMLDivElement>) => {
-                    if (!isDragEnabled || dragIndexForTask < 0) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      return;
-                    }
-                    handlePointerDown(dragIndexForTask, e);
-                  }}
+                // Check if this is the dragged item and indent just changed
+                const isBeingDragged = dragState.activeId === task.id;
+                const indentSnap = isBeingDragged && dragState.indentChanged;
+
+                return (
+                  <SortableTaskItem
+                    key={task.id}
+                    id={task.id}
+                    disabled={!isDragEnabled || dragIndexForTask < 0}
+                    indentSnap={indentSnap}
+                    snapGridX={DRAG_INDENT_WIDTH}
+                  >
+                    {isGlobalSearchActive && (
+                      <div className="px-2 pt-1 text-[10px] text-muted-foreground/70">
+                        {listNameById[task.listId ?? ''] ?? 'Inbox'}
+                      </div>
+                    )}
+                    <TaskRow
+                      task={task}
+                      index={index}
+                      isActive={isActive}
+                      dragIndex={dragIndex}
+                      dragTargetIndex={dragTargetIndex}
+                      effectiveIndent={effectiveIndent}
+                      indentWidth={INDENT_WIDTH}
+                      maxIndent={MAX_INDENT}
+                      showIndentGuides={isBeingDragged}
+                      activeTags={isTagView ? activeTagTokens.map(t => t.slice(1)) : undefined}
+                      onTagClick={handleTagSearchClick}
+                      onRemoveTag={(tag: string) => removeTagFromTask(task, tag)}
+                      onToggleMomentum={() => toggleMomentum(task)}
+                      rowRef={(el: HTMLDivElement | null) => {
+                        rowRefs.current[index] = el;
+                      }}
+                      onFocusRow={() => setActiveTaskId(task.id)}
+                      onMouseDownRow={(e: React.MouseEvent<HTMLDivElement>) => {
+                        const t = e.target as HTMLElement | null;
+                        if (t?.closest('[data-no-edit],input,textarea,button')) return;
+                        setActiveTaskId(task.id);
+                        if (editingId !== task.id) startEditing(task, task.text.length);
+                      }}
+                      onKeyDownCapture={(e: React.KeyboardEvent<HTMLDivElement>) =>
+                        handleRowKeyDownCapture(e, index, task)}
+                      onPointerDown={undefined}
                   onToggleCompleted={() => toggleCompleted(task)}
                   onDelete={() => deleteTask(task)}
                   movingTaskId={movingTaskId}
@@ -1811,11 +1855,13 @@ const handleTagSearchClick = (rawTag: string) => {
                       Math.min(task.text.length, caret ?? task.text.length)
                     );
                   }}
-                  searchQuery={normalizedQuery}
-                />
-              </div>
-            );
-          })}
+                      searchQuery={normalizedQuery}
+                    />
+                  </SortableTaskItem>
+                );
+              })}
+            </SortableContext>
+          </DndContext>
           {visibleTaskEntries.length === 0 && (
             <div className="py-10 text-center text-sm text-muted-foreground">
               No tasks in this list.
