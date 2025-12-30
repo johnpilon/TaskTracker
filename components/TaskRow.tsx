@@ -164,7 +164,20 @@ export default function TaskRow({
         />
       )}
 
-      {/* Indent guides - visible during drag */}
+      {/* Persistent indent guides - always show bars for indented items */}
+      {!isEntryRow && effectiveIndent > 0 && (
+        <div className="absolute inset-y-0 left-0 pointer-events-none">
+          {Array.from({ length: effectiveIndent }, (_, i) => (
+            <div
+              key={i}
+              className="absolute top-2 bottom-2 w-0.5 rounded-full bg-muted-foreground/30"
+              style={{ left: `${12 + i * indentWidth}px` }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Drag indent guides - show all levels during drag with active highlight */}
       {showIndentGuides && (
         <div className="absolute inset-y-0 left-0 pointer-events-none">
           {Array.from({ length: maxIndent + 1 }, (_, i) => (
@@ -172,8 +185,8 @@ export default function TaskRow({
               key={i}
               className={cn(
                 'absolute top-1 bottom-1 w-0.5 rounded-full transition-colors duration-75',
-                i === effectiveIndent 
-                  ? 'bg-primary/60' 
+                i === effectiveIndent
+                  ? 'bg-primary/60'
                   : 'bg-muted-foreground/20'
               )}
               style={{ left: `${8 + i * indentWidth}px` }}

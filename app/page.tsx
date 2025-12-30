@@ -39,24 +39,37 @@ function SortableTaskItem({
   children,
   indentSnap,
   snapGridX = 0,
+  isInDragBlock = false,
+  blockedIndent = false,
 }: { 
   id: string; 
   disabled: boolean; 
   children: React.ReactNode;
   indentSnap?: boolean;
   snapGridX?: number;
+  isInDragBlock?: boolean;
+  blockedIndent?: boolean;
 }) {
   const { sortableProps, isDragging, isOver } = useSortableTask(id, disabled, snapGridX);
+  
+  // Visual state: dragging (parent), in block (child), or blocked
+  const isBlockItem = isDragging || isInDragBlock;
   
   return (
     <div 
       {...sortableProps} 
       className={cn(
         'relative',
-        isDragging && 'ring-2 ring-primary/50 rounded-sm bg-background',
+        // Block drag styling (parent or child in block)
+        isBlockItem && 'ring-2 ring-primary/50 rounded-sm bg-background/80',
+        // Parent item gets slightly stronger styling
+        isDragging && 'ring-2 ring-primary/70 bg-background',
         // Strong visual pulse on indent snap
         isDragging && indentSnap && 'ring-4 ring-primary shadow-xl shadow-primary/30 scale-[1.02]',
-        isOver && !isDragging && 'before:absolute before:inset-x-2 before:-top-0.5 before:h-1 before:bg-primary before:rounded-full'
+        // Blocked indent indicator - red tint
+        isDragging && blockedIndent && 'ring-destructive/50',
+        // Drop target indicator
+        isOver && !isBlockItem && 'before:absolute before:inset-x-2 before:-top-0.5 before:h-1 before:bg-primary before:rounded-full'
       )}
       style={{
         ...sortableProps.style,
@@ -66,6 +79,12 @@ function SortableTaskItem({
           : sortableProps.style?.transition,
       }}
     >
+      {/* Blocked indent indicator icon */}
+      {isDragging && blockedIndent && (
+        <div className="absolute -right-1 -top-1 z-50 w-4 h-4 rounded-full bg-destructive/80 flex items-center justify-center">
+          <span className="text-[10px] text-destructive-foreground font-bold">!</span>
+        </div>
+      )}
       {children}
     </div>
   );
@@ -1732,6 +1751,9 @@ const handleTagSearchClick = (rawTag: string) => {
                 // Check if this is the dragged item and indent just changed
                 const isBeingDragged = dragState.activeId === task.id;
                 const indentSnap = isBeingDragged && dragState.indentChanged;
+                
+                // Check if this task is part of the drag block (parent or child)
+                const isInDragBlock = dragState.blockIds.includes(task.id) && !isBeingDragged;
 
                 return (
                   <SortableTaskItem
@@ -1740,6 +1762,8 @@ const handleTagSearchClick = (rawTag: string) => {
                     disabled={!isDragEnabled || dragIndexForTask < 0}
                     indentSnap={indentSnap}
                     snapGridX={DRAG_INDENT_WIDTH}
+                    isInDragBlock={isInDragBlock}
+                    blockedIndent={isBeingDragged && dragState.blockedIndent}
                   >
                     {isGlobalSearchActive && (
                       <div className="px-2 pt-1 text-[10px] text-muted-foreground/70">
