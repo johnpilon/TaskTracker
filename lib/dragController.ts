@@ -292,11 +292,15 @@ export function useDragController<
     const overIndex = over ? tasks.findIndex(t => t.id === over.id) : null;
 
     // Calculate horizontal delta for indent
+    // Use the ORIGINAL base indent (captured at drag start), not the current task indent
     const deltaX = delta.x;
     const step = Math.trunc(deltaX / INDENT_WIDTH);
-    const proposedIndentShift = step;
+    const originalBaseIndent = baseIndentRef.current; // This is set ONCE at drag start
 
-    // Get the current block (may have shifted due to previous indent changes)
+    // Target indent based on original position + drag distance
+    const proposedTargetIndent = Math.max(0, Math.min(MAX_INDENT, originalBaseIndent + step));
+
+    // Get the current block
     const currentActiveIndex = tasks.findIndex(t => t.id === activeId);
     if (currentActiveIndex === -1) return;
 
@@ -305,13 +309,16 @@ export function useDragController<
       currentActiveIndex + blockRangeRef.current.size
     );
 
-    // Calculate safe indent shift that preserves relative depths
-    const safeShift = getSafeIndentShift(block, proposedIndentShift, MAX_INDENT);
-    const targetBaseIndent = Math.max(0, Math.min(MAX_INDENT, baseIndentRef.current + safeShift));
-    const actualShift = targetBaseIndent - baseIndentRef.current;
+    // Calculate the actual shift needed from current task indent to proposed target
+    const currentTaskIndent = block[0]?.indent ?? 0;
+    const proposedShift = proposedTargetIndent - currentTaskIndent;
 
-    // Check if we're blocked (trying to indent right but can't)
-    const blockedIndent = proposedIndentShift > 0 && safeShift < proposedIndentShift;
+    // Get safe shift that preserves relative depths within block
+    const safeShift = getSafeIndentShift(block, proposedShift, MAX_INDENT);
+    const targetBaseIndent = currentTaskIndent + safeShift;
+
+    // Check if we're blocked (trying to indent right but can't reach proposed)
+    const blockedIndent = proposedTargetIndent > targetBaseIndent;
 
     // Check if overIndex is inside the dragged block (would be a no-op)
     let validOverIndex = overIndex;
@@ -332,43 +339,34 @@ export function useDragController<
     }));
 
     // Apply indent change to entire block if needed
-    if (actualShift !== 0) {
-      const currentBaseIndent = block[0]?.indent ?? 0;
-      const newTargetIndent = currentBaseIndent + actualShift;
-      
-      // Only update if the indent actually changes
-      if (newTargetIndent !== currentBaseIndent) {
-        const { shiftedItems } = applyIndentShift(block, actualShift, MAX_INDENT);
+    if (safeShift !== 0) {
+      const { shiftedItems } = applyIndentShift(block, safeShift, MAX_INDENT);
 
-        if (DEBUG_DRAG) {
-          console.log(`Block indent change: shift=${actualShift}, base ${currentBaseIndent} -> ${newTargetIndent}`);
-        }
-
-        // Update all tasks in the block
-        setAllTasks(prevAll => {
-          const blockIdSet = new Set(blockIdsRef.current);
-          let blockIdx = 0;
-          return prevAll.map(t => {
-            if (blockIdSet.has(t.id)) {
-              return { ...t, indent: shiftedItems[blockIdx++].indent };
-            }
-            return t;
-          });
-        });
-
-        // Update base indent ref to track cumulative changes
-        baseIndentRef.current = newTargetIndent;
-
-        // Trigger snap animation
-        setDragState(prev => ({ ...prev, indentChanged: true }));
-        
-        if (indentAnimationRef.current) {
-          clearTimeout(indentAnimationRef.current);
-        }
-        indentAnimationRef.current = setTimeout(() => {
-          setDragState(prev => ({ ...prev, indentChanged: false }));
-        }, 150);
+      if (DEBUG_DRAG) {
+        console.log(`Block indent change: shift=${safeShift}, ${currentTaskIndent} -> ${targetBaseIndent} (proposed: ${proposedTargetIndent})`);
       }
+
+      // Update all tasks in the block
+      setAllTasks(prevAll => {
+        const blockIdSet = new Set(blockIdsRef.current);
+        let blockIdx = 0;
+        return prevAll.map(t => {
+          if (blockIdSet.has(t.id)) {
+            return { ...t, indent: shiftedItems[blockIdx++].indent };
+          }
+          return t;
+        });
+      });
+
+      // Trigger snap animation
+      setDragState(prev => ({ ...prev, indentChanged: true }));
+      
+      if (indentAnimationRef.current) {
+        clearTimeout(indentAnimationRef.current);
+      }
+      indentAnimationRef.current = setTimeout(() => {
+        setDragState(prev => ({ ...prev, indentChanged: false }));
+      }, 150);
     }
   }, [tasks, INDENT_WIDTH, MAX_INDENT, setAllTasks]);
 
