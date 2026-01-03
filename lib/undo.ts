@@ -19,6 +19,9 @@ export function applyUndo(prev: Task[], action: UndoAction): Task[] {
     case 'indent':
       return prev.map(t => (t.id === action.task.id ? action.task : t));
 
+    case 'drag':
+      return action.tasks;
+
     case 'split': {
       const next = [...prev];
 
@@ -45,6 +48,8 @@ export function applyUndo(prev: Task[], action: UndoAction): Task[] {
       return next;
     }
   }
+
+  return prev;
 }
 
 export function getUndoPendingFocus(action: UndoAction): PendingFocus | null {
@@ -59,12 +64,20 @@ export function getUndoPendingFocus(action: UndoAction): PendingFocus | null {
         ? { taskId: action.removed.id, mode: 'edit', caret: 0 }
         : { taskId: action.keptOriginal.id, mode: 'edit', caret: action.caret };
 
+    case 'drag':
+      if (action.tasks.length > 0) {
+        return { taskId: action.tasks[0].id, mode: 'row' };
+      }
+      return null;
+
     case 'delete':
     case 'edit':
     case 'toggle':
     case 'indent':
       return { taskId: action.task.id, mode: 'row' };
   }
+
+  return null;
 }
 
 export function pushUndo(prev: UndoAction[], action: UndoAction): UndoAction[] {

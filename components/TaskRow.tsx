@@ -4,6 +4,7 @@ import React, { useLayoutEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import type { Task } from '../app/page';
 import { highlightMatches } from '../lib/highlightMatches';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface TaskRowProps {
   task: Task;
@@ -224,11 +225,9 @@ export default function TaskRow({
             </div>
           </div>
 
-          <input
-            type="checkbox"
+          <Checkbox
             checked={task.completed}
-            onChange={onToggleCompleted as any}
-            className="h-4 w-4 accent-muted-foreground self-start mt-[2px]"
+            onCheckedChange={() => (onToggleCompleted as any)()}
             data-no-edit
           />
         </>

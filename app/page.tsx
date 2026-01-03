@@ -30,6 +30,7 @@ import {
   DndContext,
   SortableContext,
   verticalListSortingStrategy,
+  getBlockRange,
 } from '../lib/dragController';
 
 // Sortable wrapper for task items
@@ -130,6 +131,7 @@ export type UndoAction =
   | { type: 'edit'; task: Task }
   | { type: 'toggle'; task: Task }
   | { type: 'indent'; task: Task }
+  | { type: 'drag'; tasks: Task[] }
   | { type: 'split'; original: Task; createdId: string; cursor: number }
   | {
       type: 'merge';
@@ -1804,15 +1806,47 @@ const handleTagSearchClick = (rawTag: string) => {
                   onShowMoveList={() => setMovingTaskId(task.id)}
                   onMoveToList={(targetListId: string) => {
                     setAllTasks(prev => {
-                      const moving = prev.find(t => t.id === task.id);
+                      const globalStart = prev.findIndex(t => t.id === task.id);
+                      if (globalStart < 0) return prev;
+                      const moving = prev[globalStart];
                       if (!moving) return prev;
-                      const updated = { ...moving, listId: targetListId };
-                      const remaining = prev.filter(t => t.id !== task.id);
-                      const insertAt = remaining.findIndex(t => t.listId === targetListId);
-                      if (insertAt === -1) return [...remaining, updated];
+                      if (moving.listId === targetListId) return prev;
+
+                      // Build the active list slice indices (non-archived, same listId)
+                      const listIndices: number[] = [];
+                      for (let i = 0; i < prev.length; i++) {
+                        const t = prev[i];
+                        if (!t.archived && t.listId === moving.listId) {
+                          listIndices.push(i);
+                        }
+                      }
+
+                      const positionInList = listIndices.indexOf(globalStart);
+                      if (positionInList < 0) return prev;
+
+                      const listItems = listIndices.map(i => prev[i]);
+                      const blockRange = getBlockRange(listItems, positionInList);
+                      const globalBlockIndices = listIndices.slice(
+                        blockRange.start,
+                        blockRange.endExclusive
+                      );
+
+                      const block = globalBlockIndices.map(i => ({
+                        ...prev[i],
+                        listId: targetListId,
+                      }));
+
+                      const removeSet = new Set(globalBlockIndices);
+                      const remaining = prev.filter((_t, idx) => !removeSet.has(idx));
+
+                      let insertAt = remaining.findIndex(
+                        t => !t.archived && t.listId === targetListId
+                      );
+                      if (insertAt === -1) insertAt = remaining.length;
+
                       return [
                         ...remaining.slice(0, insertAt),
-                        updated,
+                        ...block,
                         ...remaining.slice(insertAt),
                       ];
                     });

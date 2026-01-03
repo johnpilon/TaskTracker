@@ -55,14 +55,14 @@ export function getBlockRange<T extends { indent: number }>(
 /**
  * Remove a range from an array, returning the remaining items.
  */
-function removeRange<T>(array: T[], start: number, endExclusive: number): T[] {
+export function removeRange<T>(array: T[], start: number, endExclusive: number): T[] {
   return [...array.slice(0, start), ...array.slice(endExclusive)];
 }
 
 /**
  * Insert items into an array at a given index.
  */
-function insertRange<T>(array: T[], insertIndex: number, items: T[]): T[] {
+export function insertRange<T>(array: T[], insertIndex: number, items: T[]): T[] {
   return [
     ...array.slice(0, insertIndex),
     ...items,
@@ -71,81 +71,115 @@ function insertRange<T>(array: T[], insertIndex: number, items: T[]): T[] {
 }
 
 /**
- * Compute the maximum allowed base indent based on the neighbor above the insertion point.
- * Rule: A task at indent d>0 must have a parent candidate above it with indent == d-1.
- * Simplified: base indent cannot exceed (indent of previous item + 1).
+ * Move a contiguous block within the same array (pure).
+ * targetIndex is expressed in original coordinates; internally we convert to the
+ * coordinates of the remaining array after removal.
  */
-function getMaxAllowedIndent<T extends { indent: number }>(
-  collapsedTasks: T[],
-  insertIndex: number,
-  maxIndent: number
-): number {
-  if (insertIndex <= 0 || collapsedTasks.length === 0) {
-    return 0; // First item must have indent 0
+export function moveBlockWithinArray<T>(
+  items: T[],
+  start: number,
+  endExclusive: number,
+  targetIndex: number
+): T[] {
+  if (start < 0 || endExclusive > items.length || start >= endExclusive) return items;
+
+  const block = items.slice(start, endExclusive);
+  const remaining = [...items.slice(0, start), ...items.slice(endExclusive)];
+
+  let adjustedTarget = targetIndex;
+  if (adjustedTarget > start) {
+    adjustedTarget -= endExclusive - start;
   }
-  const prevIndent = collapsedTasks[insertIndex - 1]?.indent ?? -1;
-  return prevIndent < 0 ? 0 : Math.min(maxIndent, prevIndent + 1);
+  adjustedTarget = Math.max(0, Math.min(adjustedTarget, remaining.length));
+
+  return [
+    ...remaining.slice(0, adjustedTarget),
+    ...block,
+    ...remaining.slice(adjustedTarget),
+  ];
 }
 
 /**
- * Apply an indent shift to all items in a block, clamping to valid range.
- * Returns the shifted items and whether any clamping occurred.
+ * Clamp base indent using neighbor rules (prev indent + 1, or 0 at start).
  */
-function applyIndentShift<T extends { indent: number }>(
+export function clampIndentByNeighbors<T extends { indent: number }>(
+  collapsedTasks: T[],
+  insertIndex: number,
+  proposedBaseIndent: number,
+  maxIndent: number
+): number {
+  const prevIndent = collapsedTasks[insertIndex - 1]?.indent ?? -1;
+  const neighborMax = prevIndent < 0 ? 0 : Math.min(maxIndent, prevIndent + 1);
+  const clamped = Math.max(0, Math.min(proposedBaseIndent, neighborMax));
+  return clamped;
+}
+
+/**
+ * Set the indent for a parent block, shifting children by the same delta.
+ */
+export function setBlockIndent<T extends { indent: number }>(
+  items: T[],
+  start: number,
+  endExclusive: number,
+  newParentIndent: number,
+  maxIndent: number
+): T[] {
+  if (start < 0 || endExclusive > items.length || start >= endExclusive) return items;
+  const oldParentIndent = items[start].indent;
+  const delta = newParentIndent - oldParentIndent;
+  const next: T[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (i < start || i >= endExclusive) {
+      next.push(items[i]);
+      continue;
+    }
+    const candidate = items[i];
+    const shifted = Math.max(0, Math.min(maxIndent, candidate.indent + delta));
+    next.push({ ...candidate, indent: shifted });
+  }
+  return next;
+}
+
+/**
+ * Apply a uniform indent shift to a block while preserving relative depth.
+ * The shift is clamped so that no item exceeds [0, maxIndent].
+ */
+export function applyIndentShift<T extends { indent: number }>(
   blockItems: T[],
   indentShift: number,
   maxIndent: number
-): { shiftedItems: T[]; wasClampedHigh: boolean; wasClampedLow: boolean } {
-  let wasClampedHigh = false;
-  let wasClampedLow = false;
+): { shiftedItems: T[]; appliedShift: number; blocked: boolean } {
+  if (blockItems.length === 0) {
+    return { shiftedItems: [], appliedShift: 0, blocked: false };
+  }
 
-  const shiftedItems = blockItems.map(item => {
-    let newIndent = item.indent + indentShift;
-    if (newIndent > maxIndent) {
-      wasClampedHigh = true;
-      newIndent = maxIndent;
-    }
-    if (newIndent < 0) {
-      wasClampedLow = true;
-      newIndent = 0;
-    }
-    return { ...item, indent: newIndent };
-  });
+  const minIndent = Math.min(...blockItems.map(b => b.indent));
+  const maxIndentInBlock = Math.max(...blockItems.map(b => b.indent));
 
-  return { shiftedItems, wasClampedHigh, wasClampedLow };
+  const allowedMinShift = -minIndent;
+  const allowedMaxShift = maxIndent - maxIndentInBlock;
+
+  const appliedShift = Math.min(Math.max(indentShift, allowedMinShift), allowedMaxShift);
+  const blocked = indentShift !== appliedShift && indentShift > 0;
+
+  const shiftedItems = blockItems.map(item => ({
+    ...item,
+    indent: item.indent + appliedShift,
+  }));
+
+  return { shiftedItems, appliedShift, blocked };
 }
 
-/**
- * Check if moving the block would preserve relative child depths.
- * Returns the maximum safe indent shift that preserves structure.
- */
-function getSafeIndentShift<T extends { indent: number }>(
-  blockItems: T[],
-  proposedShift: number,
-  maxIndent: number
-): number {
-  if (blockItems.length === 0) return 0;
-
-  const baseIndent = blockItems[0].indent;
-  let maxChildOffset = 0;
-
-  for (const item of blockItems) {
-    const offset = item.indent - baseIndent;
-    if (offset > maxChildOffset) maxChildOffset = offset;
+function isSameOrderAndIndent<T extends { id: string; indent: number }>(
+  a: T[],
+  b: T[]
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id) return false;
+    if (a[i].indent !== b[i].indent) return false;
   }
-
-  // For right shift: limit so deepest child doesn't exceed MAX_INDENT
-  if (proposedShift > 0) {
-    const maxAllowedShift = maxIndent - (baseIndent + maxChildOffset);
-    return Math.min(proposedShift, Math.max(0, maxAllowedShift));
-  }
-
-  // For left shift: limit so base doesn't go below 0
-  if (proposedShift < 0) {
-    return Math.max(proposedShift, -baseIndent);
-  }
-
-  return 0;
+  return true;
 }
 
 // ============================================================================
@@ -212,18 +246,16 @@ export function useDragController<
 
   // Ref for indent change animation timeout
   const indentAnimationRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Refs to track drag start state
-  const dragStartXRef = useRef<number>(0);
-  const baseIndentRef = useRef<number>(0);
   const blockRangeRef = useRef<{ start: number; endExclusive: number; baseIndent: number; size: number }>({
     start: 0,
     endExclusive: 0,
     baseIndent: 0,
     size: 0,
   });
+  const baseIndentStartRef = useRef<number>(0);
   const blockIdsRef = useRef<string[]>([]);
   const undoSnapshotRef = useRef<TTask[] | null>(null);
+  const hasMutatedRef = useRef<boolean>(false);
 
   // Configure sensors
   const sensors = useSensors(
@@ -232,6 +264,119 @@ export function useDragController<
         distance: 5,
       },
     })
+  );
+
+  const applyPreviewToAllTasks = useCallback(
+    (preview: TTask[]) => {
+      setAllTasks(prevAll => {
+        const activeIndices: number[] = [];
+        for (let i = 0; i < prevAll.length; i++) {
+          const t = prevAll[i];
+          if (!t.archived && t.listId === activeListId) {
+            activeIndices.push(i);
+          }
+        }
+
+        if (activeIndices.length !== preview.length) {
+          return prevAll;
+        }
+
+        const next = [...prevAll];
+        for (let i = 0; i < activeIndices.length; i++) {
+          next[activeIndices[i]] = preview[i];
+        }
+        return next;
+      });
+    },
+    [activeListId, setAllTasks]
+  );
+
+  const projectDrag = useCallback(
+    (
+      sourceTasks: TTask[],
+      activeId: string,
+      overId: string | null,
+      deltaX: number,
+      overIndexOverride?: number | null,
+      placeAfter?: boolean
+    ):
+      | {
+          preview: TTask[];
+          targetIndex: number;
+          finalBaseIndent: number;
+          blockedIndent: boolean;
+          indentChanged: boolean;
+          blockRange: { start: number; endExclusive: number; baseIndent: number; size: number };
+          blockIds: string[];
+        }
+      | null => {
+      const activeIndex = sourceTasks.findIndex(t => t.id === activeId);
+      if (activeIndex === -1) return null;
+
+      const blockRange = getBlockRange(sourceTasks, activeIndex);
+      const block = sourceTasks.slice(blockRange.start, blockRange.endExclusive);
+      const blockIds = block.map(t => t.id);
+
+      const collapsed = removeRange(sourceTasks, blockRange.start, blockRange.endExclusive);
+
+      const overIndexCollapsed =
+        typeof overIndexOverride === 'number'
+          ? overIndexOverride
+          : overId
+          ? collapsed.findIndex(t => t.id === overId)
+          : null;
+
+      let insertIndex = blockRange.start;
+      if (overIndexCollapsed !== null && overIndexCollapsed >= 0) {
+        insertIndex = overIndexCollapsed + (placeAfter ? 1 : 0);
+      }
+
+      insertIndex = Math.max(0, Math.min(insertIndex, collapsed.length));
+
+      const proposedBaseIndent =
+        baseIndentStartRef.current + Math.round(deltaX / INDENT_WIDTH);
+
+      // Free indent clamped only by bounds; parentage not required.
+      const targetBaseIndent = Math.max(0, Math.min(proposedBaseIndent, MAX_INDENT));
+      const indentShiftCandidate = targetBaseIndent - blockRange.baseIndent;
+
+      // Keep structure: avoid collapsing children or exceeding bounds.
+      let lowerBound = -blockRange.baseIndent; // keep root >= 0
+      let upperBound = MAX_INDENT - blockRange.baseIndent; // keep root <= MAX
+      for (let i = 1; i < block.length; i++) {
+        const child = block[i];
+        lowerBound = Math.max(lowerBound, -child.indent);
+        upperBound = Math.min(upperBound, MAX_INDENT - child.indent);
+      }
+
+      const appliedShift = Math.max(lowerBound, Math.min(indentShiftCandidate, upperBound));
+
+      const shiftedItems = block.map(item => ({
+        ...item,
+        indent: Math.max(0, Math.min(MAX_INDENT, item.indent + appliedShift)),
+      }));
+
+      const finalBaseIndent = blockRange.baseIndent + appliedShift;
+
+      const blockedByBounds =
+        (proposedBaseIndent > MAX_INDENT && deltaX > 0) ||
+        (proposedBaseIndent < 0 && deltaX < 0);
+      const blockedByStructure = appliedShift !== indentShiftCandidate;
+      const blockedIndent = blockedByBounds || blockedByStructure;
+
+      const preview = insertRange(collapsed, insertIndex, shiftedItems);
+
+      return {
+        preview,
+        targetIndex: insertIndex,
+        finalBaseIndent,
+        blockedIndent,
+        indentChanged: appliedShift !== 0,
+        blockRange,
+        blockIds,
+      };
+    },
+    [INDENT_WIDTH, MAX_INDENT]
   );
 
   // -------------------------------------------------------------------------
@@ -252,6 +397,7 @@ export function useDragController<
     const blockIds = tasks
       .slice(blockRange.start, blockRange.endExclusive)
       .map(t => t.id);
+    baseIndentStartRef.current = task.indent;
 
     if (DEBUG_DRAG) {
       console.log('=== DRAG START ===');
@@ -262,18 +408,20 @@ export function useDragController<
     }
 
     // Store initial state
-    const pointerEvent = event.activatorEvent as PointerEvent;
-    dragStartXRef.current = pointerEvent?.clientX ?? 0;
-    baseIndentRef.current = task.indent;
     blockRangeRef.current = blockRange;
     blockIdsRef.current = blockIds;
 
-    // Capture undo snapshot of the entire task list (for this drag operation)
-    undoSnapshotRef.current = structuredClone(tasks);
+    // Capture undo snapshot of the full task list (one entry per drag)
+    hasMutatedRef.current = false;
+    undoSnapshotRef.current = null;
+    setAllTasks(prev => {
+      undoSnapshotRef.current = structuredClone(prev);
+      return prev;
+    });
 
     setDragState({
       activeId,
-      activeIndex,
+      activeIndex: blockRange.start,
       overIndex: activeIndex,
       deltaX: 0,
       currentIndent: task.indent,
@@ -282,85 +430,74 @@ export function useDragController<
       blockIds,
       blockedIndent: false,
     });
-  }, [tasks]);
+  }, [tasks, setAllTasks]);
 
   const handleDragMove = useCallback((event: DragMoveEvent) => {
     const { active, over, delta } = event;
     if (!active) return;
 
     const activeId = active.id as string;
-    const overIndex = over ? tasks.findIndex(t => t.id === over.id) : null;
+    const overId = over ? (over.id as string) : null;
 
-    // Calculate horizontal delta for indent
-    // Use the ORIGINAL base indent (captured at drag start), not the current task indent
-    const deltaX = delta.x;
-    const step = Math.trunc(deltaX / INDENT_WIDTH);
-    const originalBaseIndent = baseIndentRef.current; // This is set ONCE at drag start
-
-    // Target indent based on original position + drag distance
-    const proposedTargetIndent = Math.max(0, Math.min(MAX_INDENT, originalBaseIndent + step));
-
-    // Get the current block
-    const currentActiveIndex = tasks.findIndex(t => t.id === activeId);
-    if (currentActiveIndex === -1) return;
-
-    const block = tasks.slice(
-      currentActiveIndex,
-      currentActiveIndex + blockRangeRef.current.size
-    );
-
-    // Calculate the actual shift needed from current task indent to proposed target
-    const currentTaskIndent = block[0]?.indent ?? 0;
-    const proposedShift = proposedTargetIndent - currentTaskIndent;
-
-    // Get safe shift that preserves relative depths within block
-    const safeShift = getSafeIndentShift(block, proposedShift, MAX_INDENT);
-    const targetBaseIndent = currentTaskIndent + safeShift;
-
-    // Check if we're blocked (trying to indent right but can't reach proposed)
-    const blockedIndent = proposedTargetIndent > targetBaseIndent;
-
-    // Check if overIndex is inside the dragged block (would be a no-op)
-    let validOverIndex = overIndex;
-    if (overIndex !== null) {
-      const blockEnd = currentActiveIndex + blockRangeRef.current.size - 1;
-      if (overIndex >= currentActiveIndex && overIndex <= blockEnd) {
-        validOverIndex = currentActiveIndex; // Keep at current position
+    let overIndexOverride: number | null = null;
+    let placeAfter = false;
+    if (over) {
+      const idx = tasks.findIndex(t => t.id === over.id);
+      const overRect = (over as any).rect as { top: number; height: number } | undefined;
+      const activeRect =
+        (active.rect as any)?.current?.translated ?? (active.rect as any)?.current;
+      if (overRect && activeRect) {
+        const pointerY = (activeRect.top ?? 0) + (activeRect.height ?? 0) / 2;
+        const overMid = (overRect.top ?? 0) + (overRect.height ?? 0) / 2;
+        placeAfter = pointerY > overMid;
       }
+      if (idx === tasks.length - 1 && placeAfter) {
+        overIndexOverride = tasks.length; // after last item
+      }
+    }
+
+    const projection = projectDrag(
+      tasks,
+      activeId,
+      overId,
+      delta.x,
+      overIndexOverride,
+      placeAfter
+    );
+    if (!projection) return;
+
+    const {
+      preview,
+      targetIndex,
+      finalBaseIndent,
+      blockedIndent,
+      indentChanged,
+      blockRange,
+      blockIds,
+    } = projection;
+
+    blockRangeRef.current = blockRange;
+    blockIdsRef.current = blockIds;
+
+    const didChange = !isSameOrderAndIndent(tasks, preview);
+    if (didChange) {
+      hasMutatedRef.current = true;
+      applyPreviewToAllTasks(preview);
     }
 
     setDragState(prev => ({
       ...prev,
-      overIndex: validOverIndex !== null ? validOverIndex : prev.overIndex,
-      deltaX,
-      currentIndent: targetBaseIndent,
+      activeIndex: blockRange.start,
+      overIndex: targetIndex,
+      deltaX: delta.x,
+      currentIndent: finalBaseIndent,
       blockedIndent,
-      indentChanged: false,
+      indentChanged,
+      blockSize: blockRange.size,
+      blockIds,
     }));
 
-    // Apply indent change to entire block if needed
-    if (safeShift !== 0) {
-      const { shiftedItems } = applyIndentShift(block, safeShift, MAX_INDENT);
-
-      if (DEBUG_DRAG) {
-        console.log(`Block indent change: shift=${safeShift}, ${currentTaskIndent} -> ${targetBaseIndent} (proposed: ${proposedTargetIndent})`);
-      }
-
-      // Update all tasks in the block
-      setAllTasks(prevAll => {
-        const blockIdSet = new Set(blockIdsRef.current);
-        let blockIdx = 0;
-        return prevAll.map(t => {
-          if (blockIdSet.has(t.id)) {
-            return { ...t, indent: shiftedItems[blockIdx++].indent };
-          }
-          return t;
-        });
-      });
-
-      // Trigger snap animation
-      setDragState(prev => ({ ...prev, indentChanged: true }));
-      
+    if (indentChanged) {
       if (indentAnimationRef.current) {
         clearTimeout(indentAnimationRef.current);
       }
@@ -368,101 +505,55 @@ export function useDragController<
         setDragState(prev => ({ ...prev, indentChanged: false }));
       }, 150);
     }
-  }, [tasks, INDENT_WIDTH, MAX_INDENT, setAllTasks]);
+  }, [tasks, projectDrag, applyPreviewToAllTasks]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    const blockIds = blockIdsRef.current;
-    const originalBlockStart = blockRangeRef.current.start;
+    const { active, over, delta } = event;
 
-    if (DEBUG_DRAG) {
-      console.log('=== DRAG END ===');
-      console.log('Active:', active?.id);
-      console.log('Over:', over?.id);
-      console.log('Block IDs:', blockIds);
-      console.log('Original block start:', originalBlockStart);
-    }
-
-    // Determine if we should attempt reorder
-    const shouldReorder = active && over && !blockIds.includes(over.id as string);
-
-    if (shouldReorder) {
+    if (active) {
       const activeId = active.id as string;
-      const overId = over.id as string;
+      const overId = over ? (over.id as string) : null;
 
-      setAllTasks(prevAll => {
-        // Extract the block items by ID (preserving order)
-        const blockIdSet = new Set(blockIds);
-        const blockItems: TTask[] = [];
-        const withoutBlock: TTask[] = [];
-        
-        for (const t of prevAll) {
-          if (blockIdSet.has(t.id)) {
-            blockItems.push(t);
-          } else {
-            withoutBlock.push(t);
-          }
+      let overIndexOverride: number | null = null;
+      let placeAfter = false;
+      if (over) {
+        const idx = tasks.findIndex(t => t.id === over.id);
+        const overRect = (over as any).rect as { top: number; height: number } | undefined;
+        const activeRect =
+          (active.rect as any)?.current?.translated ?? (active.rect as any)?.current;
+        if (overRect && activeRect) {
+          const pointerY = (activeRect.top ?? 0) + (activeRect.height ?? 0) / 2;
+          const overMid = (overRect.top ?? 0) + (overRect.height ?? 0) / 2;
+          placeAfter = pointerY > overMid;
         }
-
-        if (blockItems.length === 0) return prevAll;
-
-        // Find insertion point in the collapsed list
-        const overIndexInCollapsed = withoutBlock.findIndex(t => t.id === overId);
-        
-        if (overIndexInCollapsed === -1) {
-          // Over item not found in collapsed list, no-op
-          if (DEBUG_DRAG) {
-            console.log('Over item not found in collapsed list');
-          }
-          return prevAll;
+        if (idx === tasks.length - 1 && placeAfter) {
+          overIndexOverride = tasks.length; // after last item
         }
+      }
 
-        // Determine drop position: before or after the over item based on original positions
-        const activeOriginalIndex = prevAll.findIndex(t => t.id === activeId);
-        const overOriginalIndex = prevAll.findIndex(t => t.id === overId);
-        
-        // Insert before if dragging up, after if dragging down
-        const insertIndex = activeOriginalIndex < overOriginalIndex 
-          ? overIndexInCollapsed + 1  // Dragging down: insert after over item
-          : overIndexInCollapsed;     // Dragging up: insert before over item
-        
-        // Clamp insert index
-        const safeInsertIndex = Math.max(0, Math.min(withoutBlock.length, insertIndex));
+      const projection = projectDrag(
+        tasks,
+        activeId,
+        overId,
+        delta.x,
+        overIndexOverride,
+        placeAfter
+      );
 
-        if (DEBUG_DRAG) {
-          console.log(`Block reorder: ${blockItems.length} items, overIdx=${overIndexInCollapsed}, insertIdx=${safeInsertIndex}`);
-          console.log(`Active orig: ${activeOriginalIndex}, Over orig: ${overOriginalIndex}`);
+      if (projection) {
+        const { preview, blockRange, blockIds } = projection;
+        blockRangeRef.current = blockRange;
+        blockIdsRef.current = blockIds;
+
+        const didChange = !isSameOrderAndIndent(tasks, preview);
+        if (didChange) {
+          hasMutatedRef.current = true;
+          applyPreviewToAllTasks(preview);
         }
-
-        // Check neighbor constraint for indent
-        const maxAllowed = getMaxAllowedIndent(withoutBlock, safeInsertIndex, MAX_INDENT);
-        const currentBaseIndent = blockItems[0]?.indent ?? 0;
-
-        let finalBlock = blockItems;
-        if (currentBaseIndent > maxAllowed) {
-          // Need to adjust indent to satisfy neighbor constraint
-          const adjustment = maxAllowed - currentBaseIndent;
-          const { shiftedItems } = applyIndentShift(blockItems, adjustment, MAX_INDENT);
-          finalBlock = shiftedItems;
-        }
-
-        // Insert the block at the new position
-        const result = insertRange(withoutBlock, safeInsertIndex, finalBlock);
-        
-        // Check if anything actually changed
-        const changed = result.some((t, i) => prevAll[i]?.id !== t.id);
-        if (!changed) {
-          if (DEBUG_DRAG) console.log('No actual change in order');
-          return prevAll;
-        }
-        
-        return result;
-      });
+      }
     }
 
-    // Push undo snapshot only if changes were made (indent changes during drag)
-    // We already capture the snapshot at drag start, so push it now
-    if (undoSnapshotRef.current) {
+    if (undoSnapshotRef.current && hasMutatedRef.current) {
       const snapshot = undoSnapshotRef.current;
       setUndoStack(stack => [
         ...stack,
@@ -485,16 +576,16 @@ export function useDragController<
       blockIds: [],
       blockedIndent: false,
     });
-    dragStartXRef.current = 0;
-    baseIndentRef.current = 0;
     blockRangeRef.current = { start: 0, endExclusive: 0, baseIndent: 0, size: 0 };
+    baseIndentStartRef.current = 0;
     blockIdsRef.current = [];
     undoSnapshotRef.current = null;
+    hasMutatedRef.current = false;
     if (indentAnimationRef.current) {
       clearTimeout(indentAnimationRef.current);
       indentAnimationRef.current = null;
     }
-  }, [setAllTasks, setUndoStack, MAX_INDENT]);
+  }, [tasks, projectDrag, applyPreviewToAllTasks, setUndoStack]);
 
   const handleDragCancel = useCallback(() => {
     if (DEBUG_DRAG) {
@@ -503,7 +594,7 @@ export function useDragController<
 
     // Restore from undo snapshot on cancel
     if (undoSnapshotRef.current) {
-      setAllTasks(undoSnapshotRef.current);
+      setAllTasks(() => undoSnapshotRef.current as TTask[]);
     }
 
     // Reset drag state
@@ -518,11 +609,11 @@ export function useDragController<
       blockIds: [],
       blockedIndent: false,
     });
-    dragStartXRef.current = 0;
-    baseIndentRef.current = 0;
     blockRangeRef.current = { start: 0, endExclusive: 0, baseIndent: 0, size: 0 };
+    baseIndentStartRef.current = 0;
     blockIdsRef.current = [];
     undoSnapshotRef.current = null;
+    hasMutatedRef.current = false;
     if (indentAnimationRef.current) {
       clearTimeout(indentAnimationRef.current);
       indentAnimationRef.current = null;
